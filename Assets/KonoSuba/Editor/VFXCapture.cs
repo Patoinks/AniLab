@@ -228,9 +228,10 @@ namespace AnimLab.KonoSuba.EditorTools
                 ldr = new RenderTexture(W, H, 0);
                 tex = new Texture2D(W, H, TextureFormat.RGB24, false);
             }
+            // A câmara fica a apontar para o alvo da captura: assim os efeitos que leem o tamanho da câmara
+            // (ex.: o reflexo da água, criado no LateUpdate) usam 1920×1080 e não o tamanho da janela do batchmode.
             cam.targetTexture = hdr;
             cam.Render();
-            cam.targetTexture = null;
             Graphics.Blit(hdr, ldr);
             RenderTexture.active = ldr;
             tex.ReadPixels(new Rect(0, 0, W, H), 0, 0);

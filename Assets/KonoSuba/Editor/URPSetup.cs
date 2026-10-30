@@ -114,7 +114,9 @@ namespace AnimLab.KonoSuba.EditorTools
             // Nevoeiro rasteiro em ecrã: o protagonista da cena, sem cards perto da câmara.
             var groundFog = profile.Add<GroundFog>(true);
             groundFog.noise.Override(fogNoise);
-            groundFog.density.Override(0.12f); // em Linear a densidade antiga lia-se leitosa
+            // O shader mistura o nevoeiro em espaço gama (como no projeto em Gamma); com estes valores fica igual
+            // às gravações de antes do URP (medido lado a lado).
+            groundFog.density.Override(0.12f);
             groundFog.baseHaze.Override(0.22f);
             // O fogo tem caminho de cor próprio: desenhado à parte (FireFX) e junto depois do grading.
             profile.Add<FireComposite>(true);

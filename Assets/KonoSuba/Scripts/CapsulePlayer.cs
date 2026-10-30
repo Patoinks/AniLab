@@ -69,7 +69,7 @@ namespace AnimLab.KonoSuba
             right = new Foot { t = rightFoot, side = 1f };
             foreach (Foot f in new[] { left, right })
             {
-                if (f.t == null) continue;
+                if (f == null || f.t == null) continue; // (os pés não sobrevivem a uma recompilação em play mode)
                 f.t.SetParent(null, true); // os pés vivem no mundo: ficam assentes enquanto o corpo avança
                 f.planted = FootHome(f, 0f);
                 f.t.position = f.planted;
@@ -168,7 +168,7 @@ namespace AnimLab.KonoSuba
 
             foreach (Foot f in new[] { left, right })
             {
-                if (f.t == null) continue;
+                if (f == null || f.t == null) continue; // (os pés não sobrevivem a uma recompilação em play mode)
                 if (f.stepping)
                 {
                     f.progress += Time.deltaTime / duration;

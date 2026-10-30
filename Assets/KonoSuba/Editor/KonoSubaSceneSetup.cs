@@ -41,7 +41,7 @@ namespace AnimLab.KonoSuba.EditorTools
             AssetDatabase.Refresh();
 
             Texture2D fogShape = SaveTexture("FogShape", 256, FogShapePixel, TextureWrapMode.Clamp);
-            Texture2D fogNoise = SaveTexture("FogNoise", 256, TileableNoisePixel, TextureWrapMode.Repeat);
+            Texture2D fogNoise = SaveTexture("FogNoise", 256, TileableNoisePixel, TextureWrapMode.Repeat, data: true);
             Texture2D sparkle = SaveTexture("Sparkle", 128, SparklePixel, TextureWrapMode.Clamp);
             Texture2D mote = SaveTexture("Mote", 64, MotePixel, TextureWrapMode.Clamp);
 
@@ -276,7 +276,7 @@ namespace AnimLab.KonoSuba.EditorTools
             var spot = new GameObject("CenterSpotLight").AddComponent<Light>();
             spot.type = LightType.Spot;
             spot.color = new Color(0.82f, 0.88f, 1f);
-            spot.intensity = 120f; // URP: queda física (inverso do quadrado) a 16 m de altura
+            spot.intensity = 260f; // URP: queda física (inverso do quadrado) a 16 m de altura; igual ao xadrez de antes do URP
             spot.range = 40f;
             spot.spotAngle = 75f;
             spot.innerSpotAngle = 20f;
@@ -1025,7 +1025,9 @@ namespace AnimLab.KonoSuba.EditorTools
             return m;
         }
 
-        static Texture2D SaveTexture(string name, int size, Func<float, float, Color> pixel, TextureWrapMode wrap)
+        // data: a textura guarda valores (ruído), não cor: sem conversão sRGB (em Linear esmagava os valores) e
+        // sem compressão (os blocos do DXT, ampliados pelo chão, viam-se como píxeis no nevoeiro).
+        static Texture2D SaveTexture(string name, int size, Func<float, float, Color> pixel, TextureWrapMode wrap, bool data = false)
         {
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
             for (int y = 0; y < size; y++)
@@ -1040,6 +1042,11 @@ namespace AnimLab.KonoSuba.EditorTools
             importer.alphaIsTransparency = true;
             importer.wrapMode = wrap;
             importer.mipmapEnabled = true;
+            if (data)
+            {
+                importer.sRGBTexture = false;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+            }
             importer.SaveAndReimport();
             var result = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
             if (result == null) throw new InvalidOperationException("KonoSuba: falhou a importação da textura " + path);
