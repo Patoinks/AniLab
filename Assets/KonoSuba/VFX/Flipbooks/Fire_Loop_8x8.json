@@ -1,0 +1,10 @@
+{
+  "grid": [
+    8,
+    8
+  ],
+  "frames": 64,
+  "fps": 30,
+  "motionStrength": 0.003076171735301614,
+  "resolution": 256
+}

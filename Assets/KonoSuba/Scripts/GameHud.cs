@@ -1,0 +1,589 @@
+using UnityEngine;
+using UnityEngine.UIElements;
+
+namespace AnimLab.KonoSuba
+{
+    /// <summary>
+    /// HUD minimalista (UI Toolkit, construído em código). Tudo o que não é retângulo direito é desenhado em
+    /// vetor (Painter2D, com anti-aliasing): barras com brilho, losangos e ornamentos.
+    ///   canto superior esquerdo — vida (barra branca) e mana (barra azul) com emblema em losango
+    ///   em baixo                — barra de habilidades 1–9 com ornamentos dourados, símbolo de cada habilidade
+    ///                             e recarga (AbilityBar preenche isto)
+    /// </summary>
+    [RequireComponent(typeof(UIDocument))]
+    public class GameHud : MonoBehaviour
+    {
+        [Header("Valores")]
+        public float health = 100f, maxHealth = 100f;
+        public float mana = 80f, maxMana = 100f;
+
+        [Header("Habilidades")]
+        [Tooltip("Ícones dos espaços 1–9 (vazio = espaço sem habilidade).")]
+        public Texture2D[] abilityIcons = new Texture2D[9];
+        public int selectedSlot;
+
+        public enum Glyph { None, Dash, WaterBall, Lightning, Kirin, Fire, Wind }
+
+        readonly Glyph[] glyphs = new Glyph[9];
+        readonly float[] cooldowns = new float[9];
+        readonly float[] deniedAt = { -9f, -9f, -9f, -9f, -9f, -9f, -9f, -9f, -9f };
+        readonly VisualElement[] glyphElements = new VisualElement[9];
+        readonly VisualElement[] cooldownElements = new VisualElement[9];
+        int lastSelected = -1;
+
+        public void SetSlotGlyph(int slot, Glyph g)
+        {
+            if (slot < 0 || slot >= 9) return;
+            glyphs[slot] = g;
+            glyphElements[slot]?.MarkDirtyRepaint();
+        }
+
+        public void SetCooldown(int slot, float remaining01)
+        {
+            if (slot < 0 || slot >= 9 || Mathf.Approximately(cooldowns[slot], remaining01)) return;
+            cooldowns[slot] = remaining01;
+            cooldownElements[slot]?.MarkDirtyRepaint();
+        }
+
+        /// <summary>Pisca o espaço a vermelho (sem mana ou em recarga).</summary>
+        public void Deny(int slot)
+        {
+            if (slot >= 0 && slot < 9) deniedAt[slot] = Time.time;
+        }
+
+        static readonly Color Gold = new Color(0.86f, 0.70f, 0.40f);
+        static readonly Color TextColor = new Color(0.92f, 0.93f, 0.96f, 1f);
+        static readonly Color HealthColor = new Color(0.97f, 0.98f, 1f);
+        static readonly Color ManaColor = new Color(0.36f, 0.64f, 1f);
+        static readonly Color SlotBorder = new Color(0.80f, 0.83f, 0.90f, 0.38f);
+        static readonly Color SlotFill = new Color(0.03f, 0.045f, 0.075f, 0.6f);
+
+        FontDefinition font;
+        bool hasFont; // sem fonte do sistema, fica a do tema por defeito
+        GlowBar healthBar, manaBar;
+        Label healthText, manaText;
+        readonly VisualElement[] slots = new VisualElement[9];
+        readonly VisualElement[] slotGlows = new VisualElement[9];
+        readonly System.Collections.Generic.List<VisualElement> glowing = new System.Collections.Generic.List<VisualElement>();
+
+        /// <summary>
+        /// Pulsar irregular (0.8–1.2) para os brilhos: dois ruídos de Perlin a velocidades diferentes,
+        /// com uma semente por elemento, para nada pulsar em sincronia nem de forma regular.
+        /// </summary>
+        static float Pulse(float seed)
+        {
+            float t = Time.time;
+            float n = Mathf.PerlinNoise(t * 1.1f, seed) * 0.65f + Mathf.PerlinNoise(t * 3.7f, seed + 17.3f) * 0.35f;
+            return 0.8f + 0.4f * n;
+        }
+
+        void OnEnable()
+        {
+            LoadFont();
+
+            VisualElement root = GetComponent<UIDocument>().rootVisualElement;
+            root.Clear();
+            root.pickingMode = PickingMode.Ignore;
+            root.style.flexGrow = 1;
+
+            BuildBars(root);
+            BuildHotbar(root);
+            Refresh();
+        }
+
+        void Update()
+        {
+            foreach (VisualElement e in glowing) e.MarkDirtyRepaint();
+            if (selectedSlot != lastSelected) { lastSelected = selectedSlot; RefreshSlots(); }
+            for (int i = 0; i < 9; i++)
+                if (Time.time - deniedAt[i] < 0.3f || cooldowns[i] > 0f) StyleSlot(i);
+            Refresh();
+        }
+
+        // Fonte com serifa do sistema (Cambria tem algarismos alinhados, que se leem melhor que os do Georgia).
+        // Gerada com hinting e a uma resolução alta, para o texto pequeno ficar nítido.
+        void LoadFont()
+        {
+            string fonts = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Fonts);
+            foreach (string file in new[] { "cambria.ttc", "times.ttf" })
+            {
+                string path = System.IO.Path.Combine(fonts, file);
+                if (!System.IO.File.Exists(path)) continue;
+                var asset = UnityEngine.TextCore.Text.FontAsset.CreateFontAsset(path, 0, 72, 8,
+                    UnityEngine.TextCore.LowLevel.GlyphRenderMode.SDFAA_HINTED, 1024, 1024);
+                if (asset == null) continue;
+                font = FontDefinition.FromSDFFont(asset);
+                hasFont = true;
+                return;
+            }
+        }
+
+        // ------------------------------------------------------------------ Vida e mana
+
+        void BuildBars(VisualElement root)
+        {
+            var box = new VisualElement();
+            box.style.position = Position.Absolute;
+            box.style.left = 30;
+            box.style.top = 30;
+            root.Add(box);
+
+            box.Add(BarRow(true, out healthBar, out healthText));
+            VisualElement manaRow = BarRow(false, out manaBar, out manaText);
+            manaRow.style.marginTop = 6;
+            box.Add(manaRow);
+        }
+
+        VisualElement BarRow(bool isHealth, out GlowBar bar, out Label text)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+
+            var emblem = new Emblem(isHealth ? new Color(0.88f, 0.86f, 0.80f) : ManaColor, isHealth, isHealth ? 9.1f : 13.7f);
+            glowing.Add(emblem);
+            row.Add(emblem);
+
+            bar = new GlowBar(isHealth ? HealthColor : ManaColor, isHealth ? 3f : 2.6f, isHealth ? 1.3f : 5.9f);
+            glowing.Add(bar);
+            bar.style.width = isHealth ? 228 : 200;
+            bar.style.height = 22;
+            bar.style.marginLeft = 8;
+            row.Add(bar);
+
+            text = MakeLabel("", 14);
+            text.style.marginLeft = 12;
+            text.style.letterSpacing = 1.2f;
+            row.Add(text);
+            return row;
+        }
+
+        void Refresh()
+        {
+            healthBar.SetValue(health / Mathf.Max(maxHealth, 1f));
+            manaBar.SetValue(mana / Mathf.Max(maxMana, 1f));
+            healthText.text = $"{Mathf.CeilToInt(health)} / {Mathf.CeilToInt(maxHealth)}";
+            manaText.text = $"{Mathf.CeilToInt(mana)} / {Mathf.CeilToInt(maxMana)}";
+        }
+
+        /// <summary>Barra fina com brilho: trilho ténue, halo em camadas, núcleo claro e ponta luminosa.</summary>
+        class GlowBar : VisualElement
+        {
+            readonly Color color;
+            readonly float thickness, seed;
+            float value = -1f;
+
+            public GlowBar(Color color, float thickness, float seed)
+            {
+                this.color = color;
+                this.thickness = thickness;
+                this.seed = seed;
+                pickingMode = PickingMode.Ignore;
+                generateVisualContent += Draw;
+            }
+
+            public void SetValue(float v)
+            {
+                v = Mathf.Clamp01(v);
+                if (Mathf.Approximately(v, value)) return;
+                value = v;
+                MarkDirtyRepaint();
+            }
+
+            void Draw(MeshGenerationContext ctx)
+            {
+                var p = ctx.painter2D;
+                float w = contentRect.width, y = contentRect.height * 0.5f;
+                float x0 = thickness, x1 = w - thickness;
+                float xf = Mathf.Lerp(x0, x1, Mathf.Max(value, 0f));
+                p.lineCap = LineCap.Round;
+
+                Line(p, x0, x1, y, thickness, new Color(1f, 1f, 1f, 0.1f));
+                if (value <= 0f) return;
+
+                // Halo: traços largos e transparentes por baixo do núcleo, a pulsar de forma irregular.
+                float k = Pulse(seed);
+                Line(p, x0, xf, y, thickness * 9f * k, new Color(color.r, color.g, color.b, 0.05f * k));
+                Line(p, x0, xf, y, thickness * 6f, new Color(color.r, color.g, color.b, 0.09f * k));
+                Line(p, x0, xf, y, thickness * 3.6f, new Color(color.r, color.g, color.b, 0.18f * k));
+                Line(p, x0, xf, y, thickness * 2f, new Color(color.r, color.g, color.b, 0.38f * k));
+                Line(p, x0, xf, y, thickness, color);
+                // Fio mais claro no centro, para a barra parecer acesa.
+                Line(p, x0, xf, y, thickness * 0.4f, Color.Lerp(color, Color.white, 0.7f));
+
+                // Ponta luminosa no fim do preenchimento.
+                float tip = Pulse(seed + 41f);
+                p.fillColor = new Color(color.r, color.g, color.b, 0.15f * tip);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 3.6f * tip, 0, 360); p.Fill();
+                p.fillColor = new Color(color.r, color.g, color.b, 0.35f * tip);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 2f, 0, 360); p.Fill();
+                p.fillColor = Color.Lerp(color, Color.white, 0.8f);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 0.8f, 0, 360); p.Fill();
+            }
+
+            static void Line(Painter2D p, float a, float b, float y, float width, Color c)
+            {
+                p.strokeColor = c;
+                p.lineWidth = width;
+                p.BeginPath();
+                p.MoveTo(new Vector2(a, y));
+                p.LineTo(new Vector2(Mathf.Max(b, a + 0.01f), y));
+                p.Stroke();
+            }
+        }
+
+        /// <summary>Emblema em losango: moldura, miolo e um pequeno brilho por trás.</summary>
+        class Emblem : VisualElement
+        {
+            public Emblem(Color c, bool large, float seed)
+            {
+                pickingMode = PickingMode.Ignore;
+                style.width = 18;
+                style.height = 22;
+                generateVisualContent += ctx =>
+                {
+                    var p = ctx.painter2D;
+                    var m = new Vector2(9, 11);
+                    float r = large ? 6.5f : 5.5f;
+                    float k = Pulse(seed);
+                    p.fillColor = new Color(c.r, c.g, c.b, 0.12f * k);
+                    Diamond(p, m, (r + 3f) * k); p.Fill();
+                    p.strokeColor = new Color(c.r, c.g, c.b, 0.9f);
+                    p.lineWidth = 1.1f;
+                    Diamond(p, m, r); p.Stroke();
+                    p.fillColor = c;
+                    Diamond(p, m, r * 0.38f); p.Fill();
+                };
+            }
+        }
+
+        static void Diamond(Painter2D p, Vector2 c, float r)
+        {
+            p.BeginPath();
+            p.MoveTo(c + new Vector2(0, -r));
+            p.LineTo(c + new Vector2(r, 0));
+            p.LineTo(c + new Vector2(0, r));
+            p.LineTo(c + new Vector2(-r, 0));
+            p.ClosePath();
+        }
+
+        // ------------------------------------------------------------------ Barra de habilidades
+
+        void BuildHotbar(VisualElement root)
+        {
+            var bar = new VisualElement();
+            bar.style.position = Position.Absolute;
+            bar.style.left = 0;
+            bar.style.right = 0;
+            bar.style.bottom = 36;
+            bar.style.flexDirection = FlexDirection.Row;
+            bar.style.justifyContent = Justify.Center;
+            bar.style.alignItems = Align.FlexStart;
+            root.Add(bar);
+
+            bar.Add(new Ornament(false));
+            for (int i = 0; i < 9; i++) bar.Add(Slot(i));
+            bar.Add(new Ornament(true));
+        }
+
+        VisualElement Slot(int index)
+        {
+            var col = new VisualElement();
+            col.style.alignItems = Align.Center;
+            col.style.marginLeft = 4;
+            col.style.marginRight = 4;
+
+            var holder = new VisualElement();
+            holder.style.width = 46;
+            holder.style.height = 46;
+            col.Add(holder);
+
+            // Brilho dourado à volta do espaço selecionado (desenhado em vetor, por trás do espaço).
+            var glow = new VisualElement { pickingMode = PickingMode.Ignore };
+            glow.style.position = Position.Absolute;
+            glow.style.left = -8; glow.style.top = -8; glow.style.right = -8; glow.style.bottom = -8;
+            float slotSeed = 31.7f + index * 4.3f;
+            glowing.Add(glow);
+            glow.generateVisualContent += ctx =>
+            {
+                var p = ctx.painter2D;
+                float k = Pulse(slotSeed);
+                foreach (var (grow, alpha) in new[] { (6f, 0.10f), (4f, 0.18f), (2f, 0.32f) })
+                {
+                    p.strokeColor = new Color(Gold.r, Gold.g, Gold.b, alpha * k);
+                    p.lineWidth = 2f;
+                    p.BeginPath();
+                    p.MoveTo(new Vector2(8 - grow, 8 - grow));
+                    p.LineTo(new Vector2(54 + grow, 8 - grow));
+                    p.LineTo(new Vector2(54 + grow, 54 + grow));
+                    p.LineTo(new Vector2(8 - grow, 54 + grow));
+                    p.ClosePath();
+                    p.Stroke();
+                }
+            };
+            holder.Add(glow);
+            slotGlows[index] = glow;
+
+            var slot = new VisualElement();
+            slot.style.position = Position.Absolute;
+            slot.style.left = 0; slot.style.top = 0; slot.style.right = 0; slot.style.bottom = 0;
+            slot.style.alignItems = Align.Center;
+            slot.style.justifyContent = Justify.Center;
+            holder.Add(slot);
+            slots[index] = slot;
+
+            Texture2D icon = abilityIcons != null && index < abilityIcons.Length ? abilityIcons[index] : null;
+            if (icon != null)
+            {
+                var img = new Image { image = icon, scaleMode = ScaleMode.ScaleToFit };
+                img.style.width = 44; // o ícone já tem a sua moldura de papel: ocupa o espaço todo
+                img.style.height = 44;
+                slot.Add(img);
+            }
+            else
+            {
+                // Símbolo vetorial da habilidade (ou um ponto, se o espaço estiver vazio).
+                var glyph = new VisualElement { pickingMode = PickingMode.Ignore };
+                glyph.style.position = Position.Absolute;
+                glyph.style.left = 0; glyph.style.top = 0; glyph.style.right = 0; glyph.style.bottom = 0;
+                glyph.generateVisualContent += ctx => DrawGlyph(ctx.painter2D, glyphs[index], 23f, 23f);
+                slot.Add(glyph);
+                glyphElements[index] = glyph;
+            }
+
+            // Recarga: véu escuro que desce de cima e vai encolhendo.
+            var cd = new VisualElement { pickingMode = PickingMode.Ignore };
+            cd.style.position = Position.Absolute;
+            cd.style.left = 0; cd.style.top = 0; cd.style.right = 0; cd.style.bottom = 0;
+            cd.generateVisualContent += ctx =>
+            {
+                float k = cooldowns[index];
+                if (k <= 0f) return;
+                var p = ctx.painter2D;
+                float h = 44f * k;
+                p.fillColor = new Color(0f, 0f, 0f, 0.6f);
+                p.BeginPath();
+                p.MoveTo(new Vector2(1, 1)); p.LineTo(new Vector2(45, 1));
+                p.LineTo(new Vector2(45, 1 + h)); p.LineTo(new Vector2(1, 1 + h));
+                p.ClosePath(); p.Fill();
+                p.strokeColor = new Color(Gold.r, Gold.g, Gold.b, 0.7f);
+                p.lineWidth = 1f;
+                p.BeginPath(); p.MoveTo(new Vector2(1, 1 + h)); p.LineTo(new Vector2(45, 1 + h)); p.Stroke();
+            };
+            slot.Add(cd);
+            cooldownElements[index] = cd;
+
+            var num = MakeLabel((index + 1).ToString(), 14);
+            num.style.marginTop = 7;
+            col.Add(num);
+
+            StyleSlot(index);
+            return col;
+        }
+
+        void RefreshSlots()
+        {
+            for (int i = 0; i < 9; i++) StyleSlot(i);
+        }
+
+        void StyleSlot(int i)
+        {
+            if (slots[i] == null) return;
+            bool selected = i == selectedSlot;
+            bool denied = Time.time - deniedAt[i] < 0.3f;
+            SetBorder(slots[i], selected ? 1.5f : 1f, denied ? new Color(0.9f, 0.3f, 0.25f) : selected ? Gold : SlotBorder);
+            slots[i].style.backgroundColor = selected ? new Color(0.14f, 0.11f, 0.06f, 0.62f) : SlotFill;
+            slotGlows[i].style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        /// <summary>Linha dourada que se desvanece para fora, com losango vazado e losango cheio junto à barra.</summary>
+        class Ornament : VisualElement
+        {
+            public Ornament(bool right)
+            {
+                pickingMode = PickingMode.Ignore;
+                style.width = 96;
+                style.height = 46;
+                style.marginLeft = right ? 6 : 0;
+                style.marginRight = right ? 0 : 6;
+                generateVisualContent += ctx =>
+                {
+                    var p = ctx.painter2D;
+                    float y = 23f;
+                    float dir = right ? 1f : -1f;
+                    float start = right ? 0f : 96f;
+                    Vector2 At(float d) => new Vector2(start + dir * d, y);
+
+                    p.strokeColor = new Color(Gold.r, Gold.g, Gold.b, 0.9f);
+                    p.lineWidth = 1f;
+                    Diamond(p, At(6), 3.6f); p.Stroke();
+                    p.fillColor = new Color(Gold.r, Gold.g, Gold.b, 0.95f);
+                    Diamond(p, At(16), 2.2f); p.Fill();
+
+                    // Linha em segmentos cada vez mais transparentes (desvanece para fora).
+                    p.lineWidth = 1f;
+                    for (int s = 0; s < 8; s++)
+                    {
+                        float a = 22 + s * 9, b = a + 9;
+                        p.strokeColor = new Color(Gold.r, Gold.g, Gold.b, 0.85f * (1f - s / 9f));
+                        p.BeginPath(); p.MoveTo(At(a)); p.LineTo(At(b)); p.Stroke();
+                    }
+                };
+            }
+        }
+
+        // Símbolos das habilidades, desenhados em vetor (sem ícones em imagem por agora).
+        static void DrawGlyph(Painter2D p, Glyph g, float cx, float cy)
+        {
+            var c = new Vector2(cx, cy);
+            switch (g)
+            {
+                case Glyph.None:
+                    p.fillColor = new Color(1f, 1f, 1f, 0.6f);
+                    p.BeginPath(); p.Arc(c, 1.1f, 0, 360); p.Fill();
+                    break;
+
+                case Glyph.Dash:
+                    // Duas setas a apontar para a frente e um rasto.
+                    p.lineCap = LineCap.Round;
+                    p.lineJoin = LineJoin.Round;
+                    p.strokeColor = new Color(0.92f, 0.94f, 1f, 0.95f);
+                    p.lineWidth = 2f;
+                    for (int i = 0; i < 2; i++)
+                    {
+                        float x = cx - 2f + i * 7f;
+                        p.BeginPath();
+                        p.MoveTo(new Vector2(x - 5f, cy - 7f));
+                        p.LineTo(new Vector2(x + 2f, cy));
+                        p.LineTo(new Vector2(x - 5f, cy + 7f));
+                        p.Stroke();
+                    }
+                    p.strokeColor = new Color(0.92f, 0.94f, 1f, 0.45f);
+                    p.lineWidth = 1.2f;
+                    p.BeginPath(); p.MoveTo(new Vector2(cx - 14f, cy - 3f)); p.LineTo(new Vector2(cx - 9f, cy - 3f)); p.Stroke();
+                    p.BeginPath(); p.MoveTo(new Vector2(cx - 15f, cy + 3f)); p.LineTo(new Vector2(cx - 10f, cy + 3f)); p.Stroke();
+                    break;
+
+                case Glyph.WaterBall:
+                    // Gota com brilho.
+                    var water = new Color(0.45f, 0.72f, 1f);
+                    p.fillColor = new Color(water.r, water.g, water.b, 0.25f);
+                    p.BeginPath(); p.Arc(c + new Vector2(0, 3), 11f, 0, 360); p.Fill();
+                    p.fillColor = water;
+                    p.BeginPath();
+                    p.MoveTo(new Vector2(cx, cy - 11f));
+                    p.BezierCurveTo(new Vector2(cx + 3f, cy - 5f), new Vector2(cx + 8f, cy - 1f), new Vector2(cx + 8f, cy + 4f));
+                    p.Arc(c + new Vector2(0, 4), 8f, 0, 180);
+                    p.BezierCurveTo(new Vector2(cx - 8f, cy - 1f), new Vector2(cx - 3f, cy - 5f), new Vector2(cx, cy - 11f));
+                    p.ClosePath();
+                    p.Fill();
+                    p.fillColor = new Color(1f, 1f, 1f, 0.85f);
+                    p.BeginPath(); p.Arc(c + new Vector2(-3f, 3f), 1.8f, 0, 360); p.Fill();
+                    break;
+
+                case Glyph.Kirin:
+                    // Cabeça de dragão roxa de perfil: cornos recuados, focinho e mandíbula aberta.
+                    p.fillColor = new Color(0.65f, 0.3f, 1f, 0.2f);
+                    p.BeginPath(); p.Arc(c, 13f, 0, 360); p.Fill();
+                    p.strokeColor = new Color(0.76f, 0.5f, 1f);
+                    p.lineWidth = 1.8f;
+                    p.lineCap = LineCap.Round;
+                    p.lineJoin = LineJoin.Round;
+                    p.BeginPath();
+                    p.MoveTo(c + new Vector2(-10, 10));
+                    p.LineTo(c + new Vector2(-7, 0));
+                    p.LineTo(c + new Vector2(-12, -10));
+                    p.LineTo(c + new Vector2(-3, -5));
+                    p.LineTo(c + new Vector2(-3, -13));
+                    p.LineTo(c + new Vector2(3, -6));
+                    p.LineTo(c + new Vector2(7, -3));
+                    p.LineTo(c + new Vector2(13, -1));
+                    p.LineTo(c + new Vector2(11, 4));
+                    p.LineTo(c + new Vector2(3, 3));
+                    p.LineTo(c + new Vector2(6, 8));
+                    p.LineTo(c + new Vector2(11, 7));
+                    p.LineTo(c + new Vector2(6, 12));
+                    p.LineTo(c + new Vector2(-2, 8));
+                    p.Stroke();
+                    p.strokeColor = new Color(0.96f, 0.88f, 1f);
+                    p.lineWidth = 1.5f;
+                    p.BeginPath(); p.MoveTo(c + new Vector2(0, -3)); p.LineTo(c + new Vector2(4, -1)); p.Stroke();
+                    p.BeginPath(); p.MoveTo(c + new Vector2(8, 3)); p.LineTo(c + new Vector2(7, 6)); p.Stroke();
+                    break;
+
+                case Glyph.Fire:
+                    // Chama laranja com o centro amarelo, desenhada por curvas contínuas.
+                    p.fillColor = new Color(1f, 0.39f, 0.045f);
+                    p.BeginPath();
+                    p.MoveTo(c + new Vector2(1, -13));
+                    p.BezierCurveTo(c + new Vector2(9, -7), c + new Vector2(3, -5), c + new Vector2(8, -1));
+                    p.BezierCurveTo(c + new Vector2(14, 5), c + new Vector2(6, 13), c + new Vector2(0, 12));
+                    p.BezierCurveTo(c + new Vector2(-12, 12), c + new Vector2(-12, 2), c + new Vector2(-6, -5));
+                    p.BezierCurveTo(c + new Vector2(-6, 1), c + new Vector2(0, 0), c + new Vector2(1, -13));
+                    p.ClosePath(); p.Fill();
+                    p.fillColor = new Color(1f, 0.88f, 0.36f);
+                    p.BeginPath();
+                    p.MoveTo(c + new Vector2(1, -2));
+                    p.BezierCurveTo(c + new Vector2(1, 3), c + new Vector2(7, 6), c + new Vector2(2, 10));
+                    p.BezierCurveTo(c + new Vector2(-7, 12), c + new Vector2(-5, 4), c + new Vector2(1, -2));
+                    p.ClosePath(); p.Fill();
+                    break;
+
+                case Glyph.Wind:
+                    // Três arcos de vento em espiral, ciano, com halo.
+                    var wind = new Color(0.45f, 1f, 0.88f);
+                    p.fillColor = new Color(wind.r, wind.g, wind.b, 0.18f);
+                    p.BeginPath(); p.Arc(c, 12f, 0, 360); p.Fill();
+                    p.lineCap = LineCap.Round;
+                    p.strokeColor = wind;
+                    p.lineWidth = 2f;
+                    p.BeginPath(); p.Arc(c, 9f, 200f, 330f); p.Stroke();
+                    p.strokeColor = new Color(0.85f, 1f, 0.97f);
+                    p.lineWidth = 1.6f;
+                    p.BeginPath(); p.Arc(c + new Vector2(1f, 1f), 5.5f, 20f, 170f); p.Stroke();
+                    p.strokeColor = new Color(wind.r, wind.g, wind.b, 0.7f);
+                    p.lineWidth = 1.3f;
+                    p.BeginPath(); p.Arc(c + new Vector2(-1f, 0f), 2.5f, 240f, 420f); p.Stroke();
+                    break;
+
+                case Glyph.Lightning:
+                    // Raio roxo em ziguezague, com halo.
+                    var violet = new Color(0.7f, 0.45f, 1f);
+                    p.fillColor = new Color(violet.r, violet.g, violet.b, 0.22f);
+                    p.BeginPath(); p.Arc(c, 12f, 0, 360); p.Fill();
+                    p.fillColor = new Color(0.9f, 0.82f, 1f);
+                    p.BeginPath();
+                    p.MoveTo(new Vector2(cx + 3f, cy - 12f));
+                    p.LineTo(new Vector2(cx - 6f, cy + 1f));
+                    p.LineTo(new Vector2(cx - 0.5f, cy + 1f));
+                    p.LineTo(new Vector2(cx - 3f, cy + 12f));
+                    p.LineTo(new Vector2(cx + 7f, cy - 2f));
+                    p.LineTo(new Vector2(cx + 1.5f, cy - 2f));
+                    p.ClosePath();
+                    p.Fill();
+                    break;
+            }
+        }
+
+        // ------------------------------------------------------------------ Utilitários
+
+        Label MakeLabel(string text, int size)
+        {
+            var l = new Label(text) { pickingMode = PickingMode.Ignore };
+            if (hasFont) l.style.unityFontDefinition = font;
+            l.style.fontSize = size;
+            l.style.color = TextColor;
+            // Sombra muito ténue: separa o texto do nevoeiro claro sem parecer contorno.
+            l.style.textShadow = new TextShadow { offset = new Vector2(0f, 1f), blurRadius = 2f, color = new Color(0f, 0f, 0f, 0.55f) };
+            l.style.paddingLeft = l.style.paddingRight = l.style.paddingTop = l.style.paddingBottom = 0;
+            l.style.marginLeft = l.style.marginRight = l.style.marginTop = l.style.marginBottom = 0;
+            return l;
+        }
+
+        static void SetBorder(VisualElement e, float w, Color c)
+        {
+            e.style.borderLeftWidth = e.style.borderRightWidth = e.style.borderTopWidth = e.style.borderBottomWidth = w;
+            e.style.borderLeftColor = e.style.borderRightColor = e.style.borderTopColor = e.style.borderBottomColor = c;
+        }
+    }
+}

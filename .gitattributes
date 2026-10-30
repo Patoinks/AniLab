@@ -1,0 +1,20 @@
+* text=auto
+
+# Ficheiros YAML do Unity: texto, sem alterar finais de linha
+*.unity text eol=lf
+*.prefab text eol=lf
+*.mat text eol=lf
+*.asset text eol=lf
+*.meta text eol=lf
+*.controller text eol=lf
+*.anim text eol=lf
+
+# Binários
+*.png binary
+*.jpg binary
+*.webp binary
+*.exr binary
+*.fbx binary
+*.blend binary
+*.wav binary
+*.mp4 binary

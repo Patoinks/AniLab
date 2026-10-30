@@ -1,0 +1,40 @@
+# Unity (gerado pelo editor)
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+sysinfo.txt
+crashlytics-build.properties
+
+# IDE / solução
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+
+# AnimLab: builds, cópias de segurança e logs soltos
+/Run/
+/Backups/
+*.log
+
+# Blender: cópias automáticas
+*.blend1
+*.blend2
+
+# Sistema
+.DS_Store
+Thumbs.db

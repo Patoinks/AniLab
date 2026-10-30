@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Wind_Disc
+  m_Shader: {fileID: 4800000, guid: b48d040c5f126294dae6414fc533a40c, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _Base: 0.25
+    - _Fade: 1
+    - _Head: -1
+    - _Heat: 0
+    - _Intensity: 0.7
+    - _Lines: 6
+    - _Mode: 2
+    - _Rate: 0.3
+    - _Shear: 2.5
+    - _Solid: 0
+    - _Speed: 1.6
+    - _Stretch: 2.5
+    - _Sway: 1
+    - _Window: 0
+    - _Wobble: 0
+    m_Colors: []
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1
