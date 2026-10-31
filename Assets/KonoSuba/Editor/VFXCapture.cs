@@ -32,6 +32,8 @@ namespace AnimLab.KonoSuba.EditorTools
     /// Janela de stats aberta, a passar pelos separadores (um a cada 2 frames): -captureStats 1.
     /// Árvores (tecla V): -captureSkills 1 — escolha Lightning + Fire nos frames 0–5, confirmada no 6, nós
     /// aprendidos no 8; no fim a escolha é desfeita (não fica nas PlayerPrefs do jogo).
+    /// Duelista sempre a guardar (sem AI): -captureDuelistGuard 1.
+    /// Estilo de espada do Player durante a gravação: -captureStyle Fencer (no fim volta ao Knight).
     /// Salto / roll do Player nos frames dados: -captureJump "10,40" -captureRoll "30". Desligar objetos: -captureDisable "Duelist".
     /// Guarda do Player (F) em intervalos de frames: -captureGuard "30-60,90-95". Semente: -captureSeed 7.
     /// (com -captureAttacks ou -captureGuard o Player deixa de ler o teclado; os callouts vão para o log)
@@ -237,6 +239,20 @@ namespace AnimLab.KonoSuba.EditorTools
             foreach (string a in Arg("-captureRoll", "").Split(','))
                 if (a.Length > 0 && int.Parse(a) == index && mover != null) mover.Roll(mover.transform.forward);
             if (Arg("-captureSkills", "0") == "1") SkillsStep();
+            // Duelista parado a guardar (para testar bloqueios e o Guard Breaker).
+            if (Arg("-captureDuelistGuard", "0") == "1")
+            {
+                GameObject d = GameObject.Find("Duelist");
+                if (d != null)
+                {
+                    var ai = d.GetComponent<DuelistAI>();
+                    if (ai != null && ai.enabled) { ai.enabled = false; d.GetComponent<CapsulePlayer>().aiWish = Vector3.zero; }
+                    var dw = d.GetComponent<SwordWielder>();
+                    if (dw != null) dw.guardHeld = true;
+                }
+            }
+            if (index == 0 && Arg("-captureStyle", null) != null)
+                UnityEngine.Object.FindFirstObjectByType<CharacterStats>()?.SetSwordStyle((SwordStyle)Enum.Parse(typeof(SwordStyle), Arg("-captureStyle", "Knight")));
 
             if (Arg("-captureStats", "0") == "1")
             {
@@ -268,7 +284,7 @@ namespace AnimLab.KonoSuba.EditorTools
             Shot(cam, count == 1 ? dir + ".png" : Path.Combine(dir, "f_" + index.ToString("D4") + ".png"));
             if (++index < count) return;
 
-            if (Arg("-captureSkills", "0") == "1") UnityEngine.Object.FindFirstObjectByType<CharacterStats>()?.ResetTrees();
+            if (Arg("-captureSkills", "0") == "1" || Arg("-captureStyle", null) != null) RestoreProgress();
             if (count > 1) Encode(dir);
             string reference = Arg("-captureCompare", null);
             if (reference != null) Compare(dir, count, reference);
@@ -306,6 +322,25 @@ namespace AnimLab.KonoSuba.EditorTools
                     foreach (AbilityElement e in new[] { AbilityElement.Lightning, AbilityElement.Fire })
                         foreach (SkillNode n in SkillTrees.Of(e))
                             if (n.id == id) stats.Learn(e, n);
+            // (o arrastar para a hotbar faz Place; aqui chama-se direto)
+            if (index == 10 && hud.Bar != null)
+            {
+                hud.Bar.Place(0, hud.Bar.Find("Dash"));
+                hud.Bar.Place(1, hud.Bar.Find("Lightning"));
+                hud.Bar.Place(2, hud.Bar.Find("Thunder"));
+                hud.Bar.Place(3, hud.Bar.Find("Fireball"));
+            }
+            if (index == 12) hud.Trees.SelectTab(1);
+            if (index == 14) stats.SetSwordStyle(SwordStyle.Fencer);
+        }
+
+        // No fim: a hotbar, as árvores e o estilo voltam ao que eram (não ficam nas PlayerPrefs do jogo).
+        static void RestoreProgress()
+        {
+            var stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
+            var bar = UnityEngine.Object.FindFirstObjectByType<AbilityBar>();
+            if (bar != null) for (int i = 0; i < 9; i++) bar.Clear(i);
+            if (stats != null) { stats.ResetTrees(); stats.SetSwordStyle(SwordStyle.Knight); }
         }
 
         // Player guiado pela gravação (sem teclado), semente fixa e callouts no log.

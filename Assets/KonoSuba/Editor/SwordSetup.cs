@@ -33,6 +33,19 @@ namespace AnimLab.KonoSuba.EditorTools
                 var w = Equip(player, "Sword_Player");
                 w.playerControlled = true;
                 w.bladeTip = 0.9f;
+                // Armas dos outros estilos (Weapon Arts): escondidas até o estilo as usar.
+                w.scythe = Extra(player, "Scythe");
+                w.greatsword = Extra(player, "Greatsword");
+                w.dagger = Extra(player, "Dagger", "Dagger_R");
+                w.offhand = Extra(player, "Dagger", "Dagger_L");
+                w.daggerHitFrom = new Vector3(0f, 0.06f, 0f);
+                w.daggerHitTo = new Vector3(0f, 0.34f, 0f);
+                w.greatswordHitFrom = new Vector3(0f, 0.15f, 0f);
+                w.greatswordHitTo = new Vector3(0f, 1.43f, 0f);
+                // (o segmento de corte vai explícito: os valores por omissão não chegam a um componente que já existe)
+                w.scytheHitFrom = new Vector3(0f, 0.55f, 0f);
+                w.scytheHitTo = new Vector3(0.76f, 0.97f, 0f);
+                EditorUtility.SetDirty(w);
                 var body = player.GetComponent<Combatant>();
                 if (body == null) body = player.AddComponent<Combatant>();
                 body.showNameplate = false;
@@ -155,6 +168,33 @@ namespace AnimLab.KonoSuba.EditorTools
             Bounds b = mesh.GetComponent<MeshFilter>().sharedMesh.bounds;
             Debug.Log($"SwordSetup: {modelName} em {owner.name} (malha {b.size}, rotação {src.localEulerAngles}, escala {src.localScale})");
             return w;
+        }
+
+        const string WeaponsFbx = "Assets/KonoSuba/Models/Weapons/Weapons.fbx";
+
+        static Transform Extra(GameObject owner, string modelName, string childName = null)
+        {
+            childName ??= modelName;
+            Transform old = owner.transform.Find(childName);
+            if (old != null) Object.DestroyImmediate(old.gameObject);
+            var model = AssetDatabase.LoadAssetAtPath<GameObject>(WeaponsFbx);
+            Transform src = model != null ? model.transform.Find(modelName) : null;
+            if (src == null) { Debug.LogError("SwordSetup: não encontrei " + modelName + " em " + WeaponsFbx); return null; }
+            var pivot = new GameObject(childName).transform;
+            pivot.SetParent(owner.transform, false);
+            var mesh = new GameObject("Model").transform;
+            mesh.SetParent(pivot, false);
+            mesh.localRotation = src.localRotation;
+            mesh.localScale = src.localScale;
+            mesh.gameObject.AddComponent<MeshFilter>().sharedMesh = src.GetComponent<MeshFilter>().sharedMesh;
+            Material[] mats = src.GetComponent<MeshRenderer>().sharedMaterials;
+            var own = new Material[mats.Length];
+            for (int i = 0; i < mats.Length; i++) own[i] = mats[i] != null && mats[i].name.Contains("Blade") ? Blade() : Hilt();
+            mesh.gameObject.AddComponent<MeshRenderer>().sharedMaterials = own;
+            pivot.gameObject.SetActive(false);
+            Bounds b = mesh.GetComponent<MeshFilter>().sharedMesh.bounds;
+            Debug.Log($"SwordSetup: {modelName} em {owner.name} (malha {b.min} → {b.max})");
+            return pivot;
         }
 
         static Material Blade() => Get("Sword_Blade", "Universal Render Pipeline/Lit", m =>

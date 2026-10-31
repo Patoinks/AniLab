@@ -8,7 +8,8 @@ namespace AnimLab.KonoSuba
     /// vetor (Painter2D, com anti-aliasing): barras com brilho, losangos e ornamentos.
     ///   canto superior esquerdo — vida (barra branca) e mana (barra azul) com emblema em losango
     ///   em baixo                — barra de habilidades 1–9 com ornamentos dourados, símbolo de cada habilidade
-    ///                             e recarga (AbilityBar preenche isto)
+    ///                             e recarga (AbilityBar preenche isto); arrasta-se para ela a partir da janela V
+    ///                             e entre espaços (estilo Metin2), e para fora para tirar
     /// </summary>
     [RequireComponent(typeof(UIDocument))]
     [DefaultExecutionOrder(-50)] // Depois do UIDocument (-100), antes dos controlos do jogador.
@@ -29,8 +30,24 @@ namespace AnimLab.KonoSuba
         readonly float[] cooldowns = new float[9];
         readonly float[] deniedAt = { -9f, -9f, -9f, -9f, -9f, -9f, -9f, -9f, -9f };
         readonly VisualElement[] glyphElements = new VisualElement[9];
+        readonly Image[] slotImages = new Image[9];
+        readonly bool[] hasIcon = new bool[9];
         readonly VisualElement[] cooldownElements = new VisualElement[9];
         int lastSelected = -1;
+
+        /// <summary>Conteúdo de um espaço: ícone em papel se houver, senão o símbolo vetorial (None = vazio).</summary>
+        public void SetSlot(int slot, Texture2D icon, Glyph g)
+        {
+            if (slot < 0 || slot >= 9) return;
+            glyphs[slot] = icon != null ? Glyph.None : g;
+            hasIcon[slot] = icon != null;
+            if (slotImages[slot] != null)
+            {
+                slotImages[slot].image = icon;
+                slotImages[slot].style.display = icon != null ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            glyphElements[slot]?.MarkDirtyRepaint();
+        }
 
         public void SetSlotGlyph(int slot, Glyph g)
         {
@@ -47,6 +64,89 @@ namespace AnimLab.KonoSuba
         }
 
         static GameHud instance;
+        VisualElement uiRoot;
+
+        // ------------------------------------------------------------------ Arrastar para a hotbar (estilo Metin2)
+
+        AbilityBar bar;
+        public AbilityBar Bar => bar != null ? bar : bar = FindFirstObjectByType<AbilityBar>();
+        VisualElement dragGhost;
+        Ability dragAbility;
+        int dragFrom = -1;
+        bool dragArmed, dragging;
+        Vector2 dragStart;
+
+        /// <summary>
+        /// Torna um elemento numa fonte de arrasto. get() diz que habilidade leva (null = nenhuma);
+        /// fromSlot é o espaço da hotbar de onde sai (-1 = vem de uma janela).
+        /// Largar num espaço põe-na lá (vinda de outro espaço, trocam); largar fora da hotbar tira-a do espaço.
+        /// </summary>
+        public void MakeDraggable(VisualElement source, System.Func<Ability> get, int fromSlot)
+        {
+            source.RegisterCallback<PointerDownEvent>(e =>
+            {
+                if (e.button != 0) return;
+                Ability a = get();
+                if (a == null) return;
+                dragAbility = a;
+                dragFrom = fromSlot;
+                dragStart = e.position;
+                dragArmed = true;
+                source.CapturePointer(e.pointerId);
+            });
+            source.RegisterCallback<PointerMoveEvent>(e =>
+            {
+                if (!dragArmed) return;
+                if (!dragging && ((Vector2)e.position - dragStart).magnitude > 6f) StartGhost();
+                if (dragging) MoveGhost(e.position);
+            });
+            source.RegisterCallback<PointerUpEvent>(e =>
+            {
+                if (!dragArmed) return;
+                dragArmed = false;
+                source.ReleasePointer(e.pointerId);
+                if (dragging) Drop(e.position);
+            });
+        }
+
+        void StartGhost()
+        {
+            dragging = true;
+            dragGhost = new VisualElement { pickingMode = PickingMode.Ignore };
+            dragGhost.style.position = Position.Absolute;
+            dragGhost.style.width = dragGhost.style.height = 46;
+            dragGhost.style.opacity = 0.85f;
+            dragGhost.style.backgroundColor = SlotFill;
+            SetBorder(dragGhost, 1.5f, Gold);
+            Bar.Visual(dragAbility, out Texture2D icon, out Glyph g);
+            if (icon != null)
+            {
+                var img = new Image { image = icon, scaleMode = ScaleMode.ScaleToFit, pickingMode = PickingMode.Ignore };
+                img.style.width = img.style.height = 44;
+                dragGhost.Add(img);
+            }
+            else dragGhost.generateVisualContent += ctx => DrawGlyph(ctx.painter2D, g, 23f, 23f);
+            uiRoot.Add(dragGhost);
+        }
+
+        void MoveGhost(Vector2 at)
+        {
+            dragGhost.style.left = at.x - 23f;
+            dragGhost.style.top = at.y - 23f;
+        }
+
+        void Drop(Vector2 at)
+        {
+            dragging = false;
+            dragGhost?.RemoveFromHierarchy();
+            dragGhost = null;
+            int target = -1;
+            for (int i = 0; i < slots.Length; i++)
+                if (slots[i] != null && slots[i].worldBound.Contains(at)) target = i;
+            if (target >= 0) Bar.Place(target, dragAbility, dragFrom);
+            else if (dragFrom >= 0) Bar.Clear(dragFrom);
+            dragAbility = null;
+        }
 
         /// <summary>
         /// O rato está em cima de algo do HUD que recebe cliques (janela de stats, hotbar, barras)?
@@ -57,6 +157,7 @@ namespace AnimLab.KonoSuba
             get
             {
                 if (instance != null && instance.settingsMenu != null && instance.settingsMenu.IsBlockingInput) return true;
+                if (instance != null && instance.onlineMenu != null && instance.onlineMenu.IsBlockingInput) return true;
                 IPanel panel = instance != null ? instance.GetComponent<UIDocument>().rootVisualElement?.panel : null;
                 if (panel == null) return false;
                 Vector2 screen = new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
@@ -90,6 +191,7 @@ namespace AnimLab.KonoSuba
         CombatOverlay combat;
         StatsWindow statsWindow;
         SettingsMenu settingsMenu;
+        AnimLab.Netcode.Unity.OnlineMenu onlineMenu;
         SkillTreeWindow skillTrees;
         CharacterStats playerStats;
         Label healthText, manaText;
@@ -115,6 +217,7 @@ namespace AnimLab.KonoSuba
             LoadFont();
 
             VisualElement root = GetComponent<UIDocument>().rootVisualElement;
+            uiRoot = root;
             root.Clear();
             root.pickingMode = PickingMode.Ignore;
             root.style.flexGrow = 1;
@@ -125,12 +228,17 @@ namespace AnimLab.KonoSuba
             statsWindow = new StatsWindow(this, root);
             skillTrees = new SkillTreeWindow(this, root);
             settingsMenu = new SettingsMenu(this, root);
+            // O atalho novo não rouba uma tecla já configurada para jogar.
+            onlineMenu = new AnimLab.Netcode.Unity.OnlineMenu(root, MakeLabel, () =>
+                !System.Array.Exists((GameAction[])System.Enum.GetValues(typeof(GameAction)), a => GameInput.Key(a) == KeyCode.F8));
             GameInput.Rebound += RefreshBinding;
             Refresh();
         }
 
         void OnDisable()
         {
+            onlineMenu?.Dispose();
+            onlineMenu = null;
             GameInput.Rebound -= RefreshBinding;
             settingsMenu?.Dispose();
             settingsMenu = null;
@@ -141,13 +249,24 @@ namespace AnimLab.KonoSuba
         void Update()
         {
             settingsMenu?.Update();
+            onlineMenu?.Update();
+            // As duas janelas partilham a suspensão sem restaurar o estado uma da outra.
+            GameInput.Suspended = (settingsMenu != null && settingsMenu.IsBlockingInput) || (onlineMenu != null && onlineMenu.IsBlockingInput);
+            AnimLab.Netcode.Unity.NetMatch.InputBlocked = GameInput.Suspended;
+            var net = AnimLab.Netcode.Unity.NetMatch.Active;
+            if (net != null && net.Ready)
+            {
+                health = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Health);
+                maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxHealth);
+                statsWindow?.SetOpen(false);
+                skillTrees?.SetOpen(false);
+            }
             foreach (VisualElement e in glowing) e.MarkDirtyRepaint();
             if (selectedSlot != lastSelected) { lastSelected = selectedSlot; RefreshSlots(); }
             for (int i = 0; i < 9; i++)
                 if (Time.time - deniedAt[i] < 0.3f || cooldowns[i] > 0f) StyleSlot(i);
             combat?.Update();
-            statsWindow?.Update();
-            skillTrees?.Update();
+            if (net == null) { statsWindow?.Update(); skillTrees?.Update(); }
             Refresh();
         }
 
@@ -453,24 +572,21 @@ namespace AnimLab.KonoSuba
             holder.Add(slot);
             slots[index] = slot;
 
-            Texture2D icon = abilityIcons != null && index < abilityIcons.Length ? abilityIcons[index] : null;
-            if (icon != null)
-            {
-                var img = new Image { image = icon, scaleMode = ScaleMode.ScaleToFit };
-                img.style.width = 44; // o ícone já tem a sua moldura de papel: ocupa o espaço todo
-                img.style.height = 44;
-                slot.Add(img);
-            }
-            else
-            {
-                // Símbolo vetorial da habilidade (ou um ponto, se o espaço estiver vazio).
-                var glyph = new VisualElement { pickingMode = PickingMode.Ignore };
-                glyph.style.position = Position.Absolute;
-                glyph.style.left = 0; glyph.style.top = 0; glyph.style.right = 0; glyph.style.bottom = 0;
-                glyph.generateVisualContent += ctx => DrawGlyph(ctx.painter2D, glyphs[index], 23f, 23f);
-                slot.Add(glyph);
-                glyphElements[index] = glyph;
-            }
+            // Ícone em papel (escondido se a habilidade não tiver) e, por baixo, o símbolo vetorial (ou um ponto,
+            // se o espaço estiver vazio). O AbilityBar preenche os dois com SetSlot.
+            var img = new Image { scaleMode = ScaleMode.ScaleToFit, pickingMode = PickingMode.Ignore };
+            img.style.width = 44; // o ícone já tem a sua moldura de papel: ocupa o espaço todo
+            img.style.height = 44;
+            img.style.display = DisplayStyle.None;
+            slot.Add(img);
+            slotImages[index] = img;
+            var glyph = new VisualElement { pickingMode = PickingMode.Ignore };
+            glyph.style.position = Position.Absolute;
+            glyph.style.left = 0; glyph.style.top = 0; glyph.style.right = 0; glyph.style.bottom = 0;
+            glyph.generateVisualContent += ctx => { if (!hasIcon[index]) DrawGlyph(ctx.painter2D, glyphs[index], 23f, 23f); };
+            slot.Add(glyph);
+            glyphElements[index] = glyph;
+            MakeDraggable(slot, () => Bar != null ? Bar.At(index) : null, index);
 
             // Recarga: véu escuro que desce de cima e vai encolhendo.
             var cd = new VisualElement { pickingMode = PickingMode.Ignore };

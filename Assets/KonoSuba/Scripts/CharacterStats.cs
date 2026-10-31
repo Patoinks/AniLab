@@ -34,6 +34,7 @@ namespace AnimLab.KonoSuba
         [Header("Árvores de habilidades")]
         public AbilityElement treeA = AbilityElement.Neutral, treeB = AbilityElement.Neutral;
         public int skillPoints = 4;
+        public SwordStyle swordStyle = SwordStyle.Knight;
 
         [Header("Atributos")]
         public int vitality = 8, intelligence = 6, strength = 9, dexterity = 7;
@@ -115,6 +116,26 @@ namespace AnimLab.KonoSuba
         readonly HashSet<string> learned = new HashSet<string>();
 
         public bool HasTrees => treeA != AbilityElement.Neutral && treeB != AbilityElement.Neutral;
+
+        /// <summary>A habilidade (displayName) está aprendida numa das duas árvores escolhidas?</summary>
+        public bool KnowsAbility(string displayName)
+        {
+            if (!HasTrees) return false;
+            foreach (AbilityElement tree in new[] { treeA, treeB })
+                foreach (SkillNode n in SkillTrees.Of(tree))
+                    if (n.ability == displayName && IsLearned(n)) return true;
+            return false;
+        }
+
+        public void SetSwordStyle(SwordStyle style)
+        {
+            if (!SwordStyles.Available(style)) return;
+            swordStyle = style;
+            PlayerPrefs.SetInt(TreePrefs + "Style", (int)style);
+            PlayerPrefs.Save();
+            if (sword != null) sword.style = style;
+            Changed?.Invoke();
+        }
         public bool IsLearned(SkillNode n) => learned.Contains(n.id);
 
         /// <summary>Base sem requisitos; ramos pedem a base; o final pede um dos ramos.</summary>
@@ -157,6 +178,7 @@ namespace AnimLab.KonoSuba
 
         void LoadTrees()
         {
+            swordStyle = (SwordStyle)PlayerPrefs.GetInt(TreePrefs + "Style", (int)swordStyle);
             if (!PlayerPrefs.HasKey(TreePrefs + "A")) return;
             treeA = (AbilityElement)PlayerPrefs.GetInt(TreePrefs + "A");
             treeB = (AbilityElement)PlayerPrefs.GetInt(TreePrefs + "B");
@@ -267,6 +289,7 @@ namespace AnimLab.KonoSuba
                 sword.staggerScale = StaggerPower;
                 sword.blockReduction = BlockReduction;
                 sword.parryWindow = ParryWindow;
+                sword.style = swordStyle;
             }
         }
     }

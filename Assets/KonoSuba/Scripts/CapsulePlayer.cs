@@ -14,7 +14,7 @@ namespace AnimLab.KonoSuba
     /// As teclas vêm do GameInput (configuráveis no menu Settings).
     /// </summary>
     [RequireComponent(typeof(CharacterController))]
-    public class CapsulePlayer : MonoBehaviour
+    public class CapsulePlayer : MonoBehaviour, AnimLab.Netcode.Unity.INetMovementView
     {
         [Header("Movimento")]
         public float walkSpeed = 3.5f;
@@ -25,6 +25,87 @@ namespace AnimLab.KonoSuba
         public bool clickToMove = true;
         [Tooltip("Multiplicador da velocidade (o CharacterStats escreve o Move Speed aqui).")]
         public float speedScale = 1f;
+
+        // Em rede só anima; a simulação é a única dona do movimento.
+        [HideInInspector] public bool externalDrive;
+        System.Action restoreExternal;
+        public bool ExternalDrive
+        {
+            get => externalDrive;
+            set
+            {
+                if (externalDrive == value) return;
+                if (value)
+                {
+                    Vector3 oldPosition = transform.position, oldVelocity = velocity;
+                    Quaternion oldRotation = transform.rotation;
+                    Motion oldMotion = motion; float oldTime = motionTime;
+                    float oldStance = stance, oldSquash = landSquash;
+                    Vector3 oldBodyPosition = body != null ? body.localPosition : Vector3.zero;
+                    Quaternion oldBodyRotation = body != null ? body.localRotation : Quaternion.identity;
+                    bool oldLong = longJump, oldDive = dived;
+                    restoreExternal = () =>
+                    {
+                        transform.SetPositionAndRotation(oldPosition, oldRotation);
+                        velocity = oldVelocity; motion = oldMotion; motionTime = oldTime; longJump = oldLong; dived = oldDive;
+                        stance = oldStance; landSquash = oldSquash;
+                        if (body != null) { body.localPosition = oldBodyPosition; body.localRotation = oldBodyRotation; }
+                        foreach (Foot foot in new[] { left, right })
+                            if (foot?.t != null) { foot.planted = FootHome(foot, 0f); foot.t.position = foot.planted; foot.stepping = false; }
+                    };
+                }
+                else { restoreExternal?.Invoke(); restoreExternal = null; }
+                externalDrive = value;
+            }
+        }
+        bool externalRunning, externalGrounded, externalFrozen;
+
+        public void CaptureNetConfig(ref AnimLab.Netcode.Sim.PlayerConfig c)
+        {
+            c.Walk = AnimLab.Netcode.Unity.ViewConvert.Fixed(walkSpeed); c.Run = AnimLab.Netcode.Unity.ViewConvert.Fixed(runSpeed);
+            c.Acceleration = AnimLab.Netcode.Unity.ViewConvert.Fixed(acceleration); c.Turn = AnimLab.Netcode.Sim.Fix.Degrees(AnimLab.Netcode.Unity.ViewConvert.Fixed(turnSpeed));
+            c.Gravity = AnimLab.Netcode.Unity.ViewConvert.Fixed(gravity); c.SpeedScale = AnimLab.Netcode.Unity.ViewConvert.Fixed(speedScale);
+            c.JumpHeight = AnimLab.Netcode.Unity.ViewConvert.Fixed(jumpHeight); c.AirControl = AnimLab.Netcode.Unity.ViewConvert.Fixed(airControl);
+            c.RollDistance = AnimLab.Netcode.Unity.ViewConvert.Fixed(rollDistance); c.RollDuration = AnimLab.Netcode.Unity.ViewConvert.Fixed(rollDuration);
+            c.RollCooldown = AnimLab.Netcode.Unity.ViewConvert.Fixed(rollCooldown);
+            c.RollInvulFrom = AnimLab.Netcode.Unity.ViewConvert.Fixed(rollInvulnerable.x); c.RollInvulTo = AnimLab.Netcode.Unity.ViewConvert.Fixed(rollInvulnerable.y);
+            c.LongJumpSpeed = AnimLab.Netcode.Unity.ViewConvert.Fixed(longJumpSpeed); c.LongJumpHeight = AnimLab.Netcode.Unity.ViewConvert.Fixed(longJumpHeight);
+            c.PlungeRaise = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeRaise); c.PlungeSpeed = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeSpeed);
+            c.PlungeHoming = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeHoming); c.PlungeMinHeight = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeMinHeight);
+            c.PlungeRadius = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeRadius); c.PlungeDamage = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeDamage);
+            c.PlungeRecovery = AnimLab.Netcode.Unity.ViewConvert.Fixed(plungeRecovery);
+            var cc = GetComponent<CharacterController>();
+            if (cc != null) { c.Radius = AnimLab.Netcode.Unity.ViewConvert.Fixed(cc.radius); c.Height = AnimLab.Netcode.Unity.ViewConvert.Fixed(cc.height); c.CenterY = AnimLab.Netcode.Unity.ViewConvert.Fixed(cc.center.y); }
+        }
+
+        public AnimLab.Netcode.Sim.PlayerInput SampleNetInput()
+        {
+            if (GameInput.Suspended) return AnimLab.Netcode.Unity.InputSampling.Quantize(Vector3.zero, transform.eulerAngles.y, 0);
+            if (cam == null) cam = Camera.main;
+            var rig = cam != null ? cam.GetComponent<Metin2Camera>() : null;
+            Vector3 wish = rig != null ? rig.ReadMovement(transform).wish : ReadInput();
+            Vector3 look = lockOn != null && lockOn.Current != null ? lockOn.Current.transform.position - transform.position : wish;
+            float yaw = look.sqrMagnitude > 0.001f ? Mathf.Atan2(look.x, look.z) * Mathf.Rad2Deg : transform.eulerAngles.y;
+            var buttons = (GameInput.GetDown(GameAction.Attack) && !GameHud.PointerOverUI ? AnimLab.Netcode.Sim.Buttons.Attack : 0) |
+                (GameInput.Get(GameAction.Guard) ? AnimLab.Netcode.Sim.Buttons.Guard : 0) |
+                (GameInput.GetDown(GameAction.Jump) ? AnimLab.Netcode.Sim.Buttons.Jump : 0) |
+                (GameInput.GetDown(GameAction.Roll) ? AnimLab.Netcode.Sim.Buttons.Roll : 0) |
+                (GameInput.Get(GameAction.Run) ? AnimLab.Netcode.Sim.Buttons.Run : 0);
+            return AnimLab.Netcode.Unity.InputSampling.Quantize(wish, yaw, buttons, lockOn != null && lockOn.Current != null);
+        }
+
+        public void ApplyNetState(AnimLab.Netcode.Sim.PlayerState state, Vector3 position, float yaw)
+        {
+            transform.SetPositionAndRotation(position, Quaternion.Euler(0f, yaw, 0f));
+            velocity = AnimLab.Netcode.Unity.ViewConvert.Vector(state.Velocity);
+            motion = (Motion)state.Motion;
+            motionTime = AnimLab.Netcode.Unity.ViewConvert.Number(state.MotionTime);
+            longJump = state.LongJump;
+            dived = state.Dived;
+            externalGrounded = state.Position.Y <= AnimLab.Netcode.Sim.Fix.Epsilon;
+            externalRunning = velocity.magnitude > walkSpeed * speedScale;
+            externalFrozen = state.HitStop > 0;
+        }
 
         [Header("Salto, roll e golpe a pique")]
         public float jumpHeight = 1.1f;
@@ -84,7 +165,7 @@ namespace AnimLab.KonoSuba
 
         enum Motion { Ground, Air, Roll, Plunge }
         Motion motion;
-        float motionTime, rollReadyAt, landLagUntil, landSquash;
+        float motionTime, rollReadyAt, landLagUntil, landSquash, stance;
         Vector3 rollDir;
         bool rollJumpQueued, longJump, dived;
         Transform plungeTarget;
@@ -132,6 +213,7 @@ namespace AnimLab.KonoSuba
 
         void Update()
         {
+            if (externalDrive) { if (!externalFrozen) { UpdateFeet(externalRunning); UpdateBody(); } return; }
             if (cam == null) cam = Camera.main;
             var rig = cam != null ? cam.GetComponent<Metin2Camera>() : null;
 
@@ -261,7 +343,7 @@ namespace AnimLab.KonoSuba
         // ------------------------------------------------------------------ Salto, roll e golpe a pique
 
         /// <summary>Salto como se tivesse carregado na tecla (gravações e AI).</summary>
-        public void Jump() => PressJump(controller.isGrounded, true);
+        public void Jump() { if (!externalDrive) PressJump(controller.isGrounded, true); }
 
         /// <summary>Roll como se tivesse carregado na tecla (gravações e AI).</summary>
         public void Roll(Vector3 direction) => TryRoll(direction, controller.isGrounded, true);
@@ -280,6 +362,7 @@ namespace AnimLab.KonoSuba
         /// <summary>Roll na direção pedida (ou para a frente). Cancela a guarda e o fim de um golpe.</summary>
         public bool TryRoll(Vector3 direction, bool grounded, bool canAct)
         {
+            if (externalDrive) return false;
             if (motion != Motion.Ground || !grounded || !canAct || Time.time < rollReadyAt || Time.time < landLagUntil) return false;
             direction.y = 0f;
             rollDir = direction.sqrMagnitude > 0.01f ? direction.normalized : transform.forward;
@@ -446,7 +529,7 @@ namespace AnimLab.KonoSuba
         void UpdateFeet(bool running)
         {
             // No ar e a rolar, os pés encolhem-se debaixo do corpo (e voltam a assentar ao aterrar).
-            if (motion != Motion.Ground || !controller.isGrounded)
+            if (motion != Motion.Ground || !(externalDrive ? externalGrounded : controller.isGrounded))
             {
                 float k = 1f - Mathf.Exp(-25f * Time.deltaTime);
                 foreach (Foot f in new[] { left, right })
@@ -548,6 +631,10 @@ namespace AnimLab.KonoSuba
                 float t = Mathf.Clamp01(motionTime / plungeRaise);
                 spin = Quaternion.AngleAxis(dived ? 18f : -12f * t, Vector3.right);
             }
+            // Postura do estilo de espada (o Fencer põe-se de lado); a rolar volta de frente.
+            float stanceTarget = sword != null && motion != Motion.Roll ? sword.StanceYaw : 0f;
+            stance = Mathf.Lerp(stance, stanceTarget, 1f - Mathf.Exp(-10f * Time.deltaTime));
+            spin = Quaternion.Euler(0f, stance, 0f) * spin;
             landSquash = Mathf.MoveTowards(landSquash, 0f, Time.deltaTime * 3f);
             drop += landSquash * 0.25f;
             if (combatant != null) combatant.extraRotation = spin;

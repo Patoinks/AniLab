@@ -12,7 +12,7 @@ namespace AnimLab.KonoSuba
     /// Knockback: impulso que decai, com gravidade; com CharacterController move-se por ele, senão pelo transform.
     /// Todos os golpes fazem o corpo (visual) recuar e inclinar-se para trás, como reação.
     /// </summary>
-    public class Combatant : MonoBehaviour
+    public class Combatant : MonoBehaviour, AnimLab.Netcode.Unity.INetCombatView
     {
         public static readonly List<Combatant> All = new List<Combatant>();
         /// <summary>Qualquer golpe recebido, em qualquer corpo (números de dano, câmara...).</summary>
@@ -32,6 +32,91 @@ namespace AnimLab.KonoSuba
 
         public float maxHealth = 400f;
         public float health = 400f;
+
+        [HideInInspector] public bool externalDrive;
+        System.Action restoreExternal;
+        public bool ExternalDrive
+        {
+            get => externalDrive;
+            set
+            {
+                if (externalDrive == value) return;
+                if (value)
+                {
+                    float oldHealth = health, oldMax = maxHealth, oldPoise = Poise, oldMaxPoise = maxPoise;
+                    float oldFlinch = flinch, oldVelocity = flinchVel; Vector3 oldAxis = flinchAxis;
+                    Quaternion oldExtra = extraRotation;
+                    bool oldAir = airborne, oldArmor = superArmor;
+                    var oldStatuses = new List<ActiveStatus>(statuses);
+                    statuses.Clear();
+                    restoreExternal = () => { health = oldHealth; maxHealth = oldMax; Poise = oldPoise; maxPoise = oldMaxPoise;
+                        airborne = oldAir; superArmor = oldArmor; flinch = oldFlinch; flinchVel = oldVelocity; flinchAxis = oldAxis; extraRotation = oldExtra;
+                        statuses.Clear(); statuses.AddRange(oldStatuses); };
+                }
+                else { restoreExternal?.Invoke(); restoreExternal = null; }
+                externalDrive = value;
+            }
+        }
+        bool externalStaggered, externalInvulnerable;
+
+        public void CaptureNetConfig(ref AnimLab.Netcode.Sim.PlayerConfig c)
+        {
+            c.MaxHealth = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxHealth); c.Defense = AnimLab.Netcode.Unity.ViewConvert.Fixed(defense);
+            c.MaxPoise = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxPoise); c.KnockbackScale = AnimLab.Netcode.Unity.ViewConvert.Fixed(knockbackScale);
+            var sheet = GetComponent<CharacterStats>();
+            c.HealthRegen = sheet != null ? AnimLab.Netcode.Unity.ViewConvert.Fixed(sheet.HealthRegen) : AnimLab.Netcode.Sim.Fix.Zero;
+        }
+
+        public void ApplyNetState(AnimLab.Netcode.Sim.PlayerState state)
+        {
+            health = AnimLab.Netcode.Unity.ViewConvert.Number(state.Health);
+            maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(state.Config.MaxHealth);
+            maxPoise = AnimLab.Netcode.Unity.ViewConvert.Number(state.Config.MaxPoise);
+            Poise = AnimLab.Netcode.Unity.ViewConvert.Number(state.Poise);
+            externalStaggered = state.Staggered;
+            externalInvulnerable = state.Invulnerable;
+            airborne = state.KnockAirborne;
+            superArmor = state.SuperArmor;
+        }
+
+        public void PresentNetEvent(AnimLab.Netcode.Sim.SimEvent ev)
+        {
+            Vector3 point = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Point);
+            Vector3 direction = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Direction);
+            if (ev.Damage > AnimLab.Netcode.Sim.Fix.Zero)
+            {
+                AnyHit?.Invoke(this, new HitInfo { damage = AnimLab.Netcode.Unity.ViewConvert.Number(ev.Damage),
+                    point = point, critical = ev.Critical });
+                flinchAxis = Vector3.Cross(Vector3.up, direction);
+                flinchVel += 300f;
+            }
+            var kind = ev.Kind;
+            // Só a apresentação usa o relógio do Unity; a sessão avança por unscaledDeltaTime.
+            if (ev.VisualStop > AnimLab.Netcode.Sim.Fix.Zero) HitStop.Do(AnimLab.Netcode.Unity.ViewConvert.Number(ev.VisualStop));
+            if (kind == AnimLab.Netcode.Sim.EventKind.Parry) HitStop.Then(0.45f, 0.3f);
+            if (kind == AnimLab.Netcode.Sim.EventKind.Clash) HitStop.Then(0.25f, 0.45f);
+            if (kind == AnimLab.Netcode.Sim.EventKind.Jump || kind == AnimLab.Netcode.Sim.EventKind.Roll ||
+                kind == AnimLab.Netcode.Sim.EventKind.Land)
+            {
+                if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(point, 0.6f);
+                return;
+            }
+            if (kind == AnimLab.Netcode.Sim.EventKind.Stagger) { AnyStagger?.Invoke(this); return; }
+            Color color = kind == AnimLab.Netcode.Sim.EventKind.Parry ? new Color(1f, 0.84f, 0.42f) :
+                kind == AnimLab.Netcode.Sim.EventKind.Clash ? new Color(0.78f, 0.88f, 1f) : new Color(1f, 0.75f, 0.45f);
+            SwordSparks.Burst(point, direction + Vector3.up * 0.4f, 22, color, speed: 9f, spread: 0.7f, flash: 0.3f);
+            string text = kind == AnimLab.Netcode.Sim.EventKind.Parry ? "PARRY" :
+                kind == AnimLab.Netcode.Sim.EventKind.Block ? "BLOCK" :
+                kind == AnimLab.Netcode.Sim.EventKind.Clash ? "CLASH" :
+                kind == AnimLab.Netcode.Sim.EventKind.GuardBreak ? "GUARD BREAK" : "";
+            if (text.Length > 0) Combat.Callout(point + Vector3.up * 0.5f, text, color, 28f);
+            if (kind == AnimLab.Netcode.Sim.EventKind.Plunge)
+            {
+                if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(point, 2.5f);
+                FogField.Blast(point, radius: 5f, strength: 0.9f, duration: 2.4f, expandTime: 0.12f, waterScale: 1f, waterSpray: true);
+                if (WaterSim.HasWaterAt(point)) WaterSim.Impulse(point, 1.6f, -0.12f, 4f);
+            }
+        }
         [Tooltip("Altura da placa (nome, vida, estados) acima dos pés (m).")]
         public float nameplateHeight = 2.35f;
         public bool showNameplate = true;
@@ -64,14 +149,16 @@ namespace AnimLab.KonoSuba
         public float refillRate = 0.5f;
 
         public float LastHitTime { get; private set; } = -99f;
+        /// <summary>Super armor (ex.: montante a golpear): os golpes quase não partem a postura nem empurram.</summary>
+        [HideInInspector] public bool superArmor;
         /// <summary>Invulnerável até este instante (roll): os golpes passam por ele.</summary>
         [HideInInspector] public float invulnerableUntil = -99f;
-        public bool IsInvulnerable => Time.time < invulnerableUntil;
+        public bool IsInvulnerable => externalDrive ? externalInvulnerable : Time.time < invulnerableUntil;
         /// <summary>Rotação extra do corpo (roll, cambalhota do ground pound), somada à inclinação dos golpes.</summary>
         [HideInInspector] public Quaternion extraRotation = Quaternion.identity;
         public float Poise { get; private set; }
         public float Poise01 => Poise / Mathf.Max(maxPoise, 1f);
-        public bool IsStaggered => Time.time < staggerUntil;
+        public bool IsStaggered => externalDrive ? externalStaggered : Time.time < staggerUntil;
         public bool IsAirborne => airborne;
         /// <summary>Stagger a começar (popup, câmara...).</summary>
         public static event Action<Combatant> AnyStagger;
@@ -123,6 +210,7 @@ namespace AnimLab.KonoSuba
 
         public void TakeHit(HitInfo hit)
         {
+            if (externalDrive) return;
             if (!isActiveAndEnabled || IsInvulnerable) return;
             if (hit.point == Vector3.zero) hit.point = ClosestPoint(hit.source != null ? hit.source.position : transform.position);
             hit.damage = Mitigate(hit);
@@ -131,6 +219,7 @@ namespace AnimLab.KonoSuba
 
             // Postura: quando parte, stagger; o golpe que a parte empurra mais.
             float push = 1f;
+            if (superArmor) { hit.stagger *= 0.25f; push = 0.3f; }
             if (hit.stagger > 0f)
             {
                 Poise -= hit.stagger;
@@ -162,6 +251,7 @@ namespace AnimLab.KonoSuba
         /// <summary>Aplica um estado; se já estiver ativo, só renova a duração (sem novo popup).</summary>
         public void ApplyStatus(StatusType type, float duration)
         {
+            if (externalDrive) return;
             if (statusResist.TryGetValue(type, out float r)) duration *= 1f - Mathf.Clamp(r, 0f, 0.8f);
             if (duration <= 0.05f) return;
             foreach (ActiveStatus a in statuses)
@@ -199,6 +289,7 @@ namespace AnimLab.KonoSuba
 
         void Update()
         {
+            if (externalDrive) { UpdateFlinch(Time.deltaTime); return; }
             for (int i = statuses.Count - 1; i >= 0; i--)
                 if ((statuses[i].remaining -= Time.deltaTime) <= 0f) statuses.RemoveAt(i);
             if (refill && health < maxHealth && Time.time - LastHitTime > refillDelay)

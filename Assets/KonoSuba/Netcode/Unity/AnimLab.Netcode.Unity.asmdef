@@ -1,0 +1,1 @@
+{"name":"AnimLab.Netcode.Unity","rootNamespace":"AnimLab.Netcode.Unity","references":["AnimLab.Netcode.Sim","AnimLab.Netcode.Rollback","AnimLab.Netcode.Transport"],"noEngineReferences":false}

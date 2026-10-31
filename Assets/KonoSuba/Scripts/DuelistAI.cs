@@ -207,7 +207,7 @@ namespace AnimLab.KonoSuba
             // Castigar: adversário aberto e perto.
             bool open = oppBody != null && oppBody.IsStaggered
                         || oppSword != null && (oppSword.IsRecoiling
-                            || oppSword.Current == SwordWielder.State.Recovery && oppSword.ComboIndex == oppSword.combo.Length - 1);
+                            || oppSword.Current == SwordWielder.State.Recovery && oppSword.ComboIndex == oppSword.ComboLength - 1);
             if (open && dist < attackRange + 0.9f)
             {
                 StartCombo(now + Random.Range(reactionTime.x, reactionTime.y) * 0.8f, Random.value < 0.6f ? 3 : 2);

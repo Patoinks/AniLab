@@ -11,6 +11,9 @@ namespace AnimLab.KonoSuba
     ///   Com árvores: as duas lado a lado, cada uma em V (base → dois ramos → final), ligadas por linhas.
     ///   Clicar num nó que se pode aprender gasta um skill point. Nós por fazer aparecem como "SOON".
     ///   O rodapé explica o nó por baixo do cursor.
+    ///   Nós aprendidos (e o Dash, em GENERAL) arrastam-se para a hotbar.
+    /// Dois separadores: ABILITIES (o acima) e WEAPON ARTS (estilos de espada: só um ativo, muda logo a postura
+    /// e os golpes).
     /// Construída e atualizada pelo GameHud.
     /// </summary>
     public class SkillTreeWindow
@@ -23,7 +26,11 @@ namespace AnimLab.KonoSuba
         const string Hint = "Hover a skill to see what it does.   [V] close";
 
         readonly GameHud hud;
-        readonly VisualElement window, chooser, treesView;
+        readonly VisualElement window, chooser, treesView, abilitiesPage, artsPage;
+        readonly VisualElement[] tabs = new VisualElement[2];
+        readonly Dictionary<SwordStyle, VisualElement> styleCards = new Dictionary<SwordStyle, VisualElement>();
+        readonly Dictionary<SwordStyle, Label> styleStates = new Dictionary<SwordStyle, Label>();
+        int tab;
         readonly List<AbilityElement> picked = new List<AbilityElement>();
         readonly List<VisualElement> repaint = new List<VisualElement>();
         readonly Dictionary<AbilityElement, VisualElement> cards = new Dictionary<AbilityElement, VisualElement>();
@@ -54,11 +61,18 @@ namespace AnimLab.KonoSuba
             root.Add(window);
 
             BuildTitle();
+            BuildTabs();
+            abilitiesPage = new VisualElement();
+            window.Add(abilitiesPage);
+            BuildGeneral();
             chooser = new VisualElement();
-            window.Add(chooser);
+            abilitiesPage.Add(chooser);
             treesView = new VisualElement();
-            window.Add(treesView);
+            abilitiesPage.Add(treesView);
             BuildChooser();
+            artsPage = new VisualElement();
+            window.Add(artsPage);
+            BuildArts();
 
             footer = hud.MakeLabel(Hint, 11);
             footer.style.color = Dim;
@@ -71,6 +85,7 @@ namespace AnimLab.KonoSuba
             footer.style.borderTopWidth = 1;
             footer.style.borderTopColor = Line;
             window.Add(footer);
+            SelectTab(0);
         }
 
         CharacterStats Stats
@@ -110,6 +125,7 @@ namespace AnimLab.KonoSuba
             if (Stats != null && (Stats.HasTrees != (treesView.style.display == DisplayStyle.Flex)
                                   || Stats.treeA != builtA || Stats.treeB != builtB)) Rebuild();
             if (pointsLabel != null && Stats != null) pointsLabel.text = Stats.skillPoints.ToString();
+            if (tab == 1) RefreshArts();
             foreach (VisualElement e in repaint) e.MarkDirtyRepaint(); // brilhos a pulsar
         }
 
@@ -171,6 +187,254 @@ namespace AnimLab.KonoSuba
             Hover(close, new Color(0.9f, 0.3f, 0.25f, 0.8f));
             close.RegisterCallback<ClickEvent>(_ => SetOpen(false));
             bar.Add(close);
+        }
+
+        // ------------------------------------------------------------------ Separadores
+
+        void BuildTabs()
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.marginTop = 10;
+            row.style.marginLeft = row.style.marginRight = 14;
+            window.Add(row);
+            string[] names = { "ABILITIES", "WEAPON ARTS" };
+            for (int i = 0; i < 2; i++)
+            {
+                int index = i;
+                var t = new VisualElement();
+                t.style.flexGrow = 1;
+                t.style.height = 26;
+                t.style.alignItems = Align.Center;
+                t.style.justifyContent = Justify.Center;
+                if (i > 0) t.style.marginLeft = 4;
+                var l = hud.MakeLabel(names[i], 12);
+                l.style.letterSpacing = 2f;
+                t.Add(l);
+                t.RegisterCallback<ClickEvent>(_ => SelectTab(index));
+                t.RegisterCallback<PointerEnterEvent>(_ => { if (tab != index) SetBorder(t, 1f, new Color(Gold.r, Gold.g, Gold.b, 0.5f)); });
+                t.RegisterCallback<PointerLeaveEvent>(_ => SelectTab(tab));
+                row.Add(t);
+                tabs[i] = t;
+            }
+        }
+
+        public void SelectTab(int index)
+        {
+            tab = index;
+            for (int i = 0; i < 2; i++)
+            {
+                bool on = i == tab;
+                tabs[i].style.backgroundColor = on ? new Color(0.14f, 0.11f, 0.06f, 0.7f) : Box;
+                SetBorder(tabs[i], 1f, on ? Gold : Line);
+                ((Label)tabs[i][0]).style.color = on ? Gold : Dim;
+            }
+            if (abilitiesPage != null) abilitiesPage.style.display = tab == 0 ? DisplayStyle.Flex : DisplayStyle.None;
+            if (artsPage != null) artsPage.style.display = tab == 1 ? DisplayStyle.Flex : DisplayStyle.None;
+            if (tab == 1) RefreshArts();
+        }
+
+        // ------------------------------------------------------------------ Geral (sempre disponível)
+
+        void BuildGeneral()
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.marginTop = 10;
+            row.style.marginLeft = row.style.marginRight = 14;
+            row.style.paddingTop = row.style.paddingBottom = 6;
+            row.style.paddingLeft = 10;
+            row.style.backgroundColor = Box;
+            SetBorder(row, 1f, Line);
+            abilitiesPage.Add(row);
+
+            var tag = hud.MakeLabel("GENERAL", 11);
+            tag.style.letterSpacing = 2f;
+            tag.style.color = Gold;
+            tag.style.width = 80;
+            row.Add(tag);
+
+            // O Dash: não pertence a nenhum elemento, arrasta-se para a hotbar quando se quiser.
+            var slot = new VisualElement();
+            slot.style.width = slot.style.height = 40;
+            slot.style.backgroundColor = new Color(0.03f, 0.045f, 0.075f, 0.8f);
+            SetBorder(slot, 1f, new Color(Gold.r, Gold.g, Gold.b, 0.6f));
+            var img = new Image { scaleMode = ScaleMode.ScaleToFit, pickingMode = PickingMode.Ignore };
+            img.style.width = img.style.height = 38;
+            slot.Add(img);
+            row.Add(slot);
+            var name = hud.MakeLabel("Dash", 12);
+            name.style.marginLeft = 8;
+            name.style.color = Dim;
+            row.Add(name);
+            var hint = hud.MakeLabel("Drag skills to the hotbar.", 10);
+            hint.style.color = new Color(Dim.r, Dim.g, Dim.b, 0.6f);
+            hint.style.marginLeft = 18;
+            row.Add(hint);
+
+            Ability Dash() => hud.Bar != null ? hud.Bar.Find("Dash") : null;
+            slot.RegisterCallback<AttachToPanelEvent>(evt =>
+            {
+                if (hud.Bar != null && hud.Bar.Visual(Dash(), out Texture2D icon, out _)) img.image = icon;
+            });
+            hud.MakeDraggable(slot, Dash, -1);
+            slot.RegisterCallback<PointerEnterEvent>(_ => { footer.text = "Dash — a quick burst of movement. Always available. Drag it to the hotbar."; SetBorder(slot, 1f, Gold); });
+            slot.RegisterCallback<PointerLeaveEvent>(_ => { footer.text = Hint; SetBorder(slot, 1f, new Color(Gold.r, Gold.g, Gold.b, 0.6f)); });
+        }
+
+        // ------------------------------------------------------------------ Weapon Arts (estilos de espada)
+
+        void BuildArts()
+        {
+            artsPage.style.paddingLeft = artsPage.style.paddingRight = 14;
+            artsPage.style.paddingTop = 12;
+            var intro = hud.MakeLabel("SWORD STYLE", 12);
+            intro.style.letterSpacing = 2f;
+            intro.style.color = Gold;
+            intro.style.alignSelf = Align.Center;
+            artsPage.Add(intro);
+            var sub = hud.MakeLabel("Choose one. Your stance and attacks change immediately.", 11);
+            sub.style.color = Dim;
+            sub.style.alignSelf = Align.Center;
+            sub.style.marginTop = 2;
+            artsPage.Add(sub);
+
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.flexWrap = Wrap.Wrap;
+            row.style.justifyContent = Justify.Center;
+            row.style.marginTop = 12;
+            row.style.marginBottom = 8;
+            artsPage.Add(row);
+            foreach (SwordStyle s in SwordStyles.All) row.Add(StyleCard(s));
+        }
+
+        VisualElement StyleCard(SwordStyle s)
+        {
+            Color c = SwordStyles.Accent(s);
+            bool available = SwordStyles.Available(s);
+            var card = new VisualElement();
+            card.style.width = 180;
+            card.style.height = 222;
+            card.style.marginLeft = card.style.marginRight = 5;
+            card.style.marginBottom = 10;
+            card.style.alignItems = Align.Center;
+            card.style.paddingTop = 12;
+            card.style.backgroundColor = Box;
+            card.style.opacity = available ? 1f : 0.55f;
+            SetBorder(card, 1f, Line);
+
+            var emblem = new VisualElement { pickingMode = PickingMode.Ignore };
+            emblem.style.width = emblem.style.height = 64;
+            emblem.generateVisualContent += ctx => DrawStyle(ctx.painter2D, s, c, Stats != null && Stats.swordStyle == s);
+            card.Add(emblem);
+            repaint.Add(emblem);
+
+            var name = hud.MakeLabel(SwordStyles.Name(s).ToUpperInvariant(), 13);
+            name.style.letterSpacing = 2f;
+            name.style.color = Color.Lerp(c, Color.white, 0.2f);
+            name.style.marginTop = 8;
+            card.Add(name);
+            var moves = hud.MakeLabel(SwordStyles.Moves(s), 10);
+            moves.style.color = new Color(c.r, c.g, c.b, 0.85f);
+            moves.style.marginTop = 4;
+            card.Add(moves);
+            var desc = hud.MakeLabel(SwordStyles.Description(s), 10);
+            desc.style.color = Dim;
+            desc.style.whiteSpace = WhiteSpace.Normal;
+            desc.style.unityTextAlign = TextAnchor.UpperCenter;
+            desc.style.paddingLeft = desc.style.paddingRight = 8;
+            desc.style.marginTop = 6;
+            desc.style.flexGrow = 1;
+            card.Add(desc);
+            var state = hud.MakeLabel(available ? "SELECT" : "SOON", 10);
+            state.style.letterSpacing = 2f;
+            state.style.marginBottom = 10;
+            card.Add(state);
+            styleStates[s] = state;
+
+            card.RegisterCallback<ClickEvent>(_ =>
+            {
+                if (available && Stats != null) Stats.SetSwordStyle(s);
+                RefreshArts();
+            });
+            card.RegisterCallback<PointerEnterEvent>(_ =>
+            {
+                footer.text = $"{SwordStyles.Name(s)} — {SwordStyles.Moves(s)}. {SwordStyles.Description(s)}";
+                if (available && (Stats == null || Stats.swordStyle != s)) SetBorder(card, 1f, new Color(c.r, c.g, c.b, 0.6f));
+            });
+            card.RegisterCallback<PointerLeaveEvent>(_ => { footer.text = Hint; RefreshArts(); });
+            styleCards[s] = card;
+            return card;
+        }
+
+        void RefreshArts()
+        {
+            foreach (var kv in styleCards)
+            {
+                bool on = Stats != null && Stats.swordStyle == kv.Key;
+                Color c = SwordStyles.Accent(kv.Key);
+                SetBorder(kv.Value, on ? 1.5f : 1f, on ? c : Line);
+                kv.Value.style.backgroundColor = on ? new Color(c.r * 0.12f, c.g * 0.12f, c.b * 0.12f, 0.75f) : Box;
+                if (!SwordStyles.Available(kv.Key)) { styleStates[kv.Key].style.color = new Color(Gold.r, Gold.g, Gold.b, 0.6f); continue; }
+                styleStates[kv.Key].text = on ? "SELECTED" : "SELECT";
+                styleStates[kv.Key].style.color = on ? c : Dim;
+            }
+        }
+
+        // Emblema de cada estilo, em traço: espadas cruzadas, florete com a guarda redonda, katana curva,
+        // montante largo.
+        static void DrawStyle(Painter2D p, SwordStyle s, Color c, bool selected)
+        {
+            var m = new Vector2(32, 32);
+            float k = selected ? 0.85f + 0.15f * Mathf.Sin(Time.time * 2f) : 0.6f;
+            p.fillColor = new Color(c.r, c.g, c.b, (selected ? 0.16f : 0.07f) * k);
+            p.BeginPath(); p.Arc(m, 30f, 0, 360); p.Fill();
+            p.strokeColor = new Color(c.r, c.g, c.b, 0.35f + 0.5f * k);
+            p.lineWidth = 1.2f;
+            p.BeginPath(); p.Arc(m, 29f, 0, 360); p.Stroke();
+            p.lineCap = LineCap.Round;
+            Color ink = Color.Lerp(c, Color.white, 0.3f * k);
+            p.strokeColor = ink;
+            p.fillColor = ink;
+            void L(float x0, float y0, float x1, float y1, float w)
+            {
+                p.lineWidth = w;
+                p.BeginPath(); p.MoveTo(new Vector2(x0, y0)); p.LineTo(new Vector2(x1, y1)); p.Stroke();
+            }
+            switch (s)
+            {
+                case SwordStyle.Knight:
+                    L(16, 48, 48, 16, 3f); L(16, 16, 48, 48, 3f);
+                    L(19, 39, 25, 45, 2.4f); L(39, 45, 45, 39, 2.4f);
+                    break;
+                case SwordStyle.Fencer:
+                    L(14, 50, 50, 14, 1.6f);
+                    p.lineWidth = 1.8f; p.BeginPath(); p.Arc(new Vector2(22, 42), 5f, 0, 360); p.Stroke();
+                    L(30, 46, 40, 46, 1.2f); L(36, 51, 46, 51, 1.2f); L(42, 56, 50, 56, 1.2f);
+                    break;
+                case SwordStyle.Reaper:
+                    L(22, 54, 34, 12, 2.2f);
+                    p.BeginPath(); p.MoveTo(new Vector2(34, 12)); p.BezierCurveTo(new Vector2(24, 10), new Vector2(14, 16), new Vector2(8, 26));
+                    p.BezierCurveTo(new Vector2(16, 20), new Vector2(24, 17), new Vector2(33, 18)); p.ClosePath(); p.Fill();
+                    break;
+                case SwordStyle.Daggers:
+                    L(20, 48, 28, 22, 2.6f); L(44, 48, 36, 22, 2.6f);
+                    L(16, 44, 26, 47, 2f); L(38, 47, 48, 44, 2f);
+                    L(21, 50, 19, 55, 3f); L(43, 50, 45, 55, 3f);
+                    break;
+                case SwordStyle.Iaido:
+                    p.lineWidth = 2.6f;
+                    p.BeginPath(); p.MoveTo(new Vector2(14, 48)); p.BezierCurveTo(new Vector2(26, 30), new Vector2(38, 20), new Vector2(52, 16)); p.Stroke();
+                    L(18, 40, 24, 46, 2.6f);
+                    break;
+                default:
+                    p.BeginPath(); p.MoveTo(new Vector2(30, 12)); p.LineTo(new Vector2(36, 12)); p.LineTo(new Vector2(38, 44));
+                    p.LineTo(new Vector2(28, 44)); p.ClosePath(); p.Fill();
+                    L(22, 44, 44, 44, 3f); L(33, 44, 33, 54, 3f);
+                    break;
+            }
         }
 
         // ------------------------------------------------------------------ Escolha dos dois elementos
@@ -512,6 +776,8 @@ namespace AnimLab.KonoSuba
                 holder.Add(soon);
             }
 
+            // Aprendido: arrasta-se para a hotbar.
+            hud.MakeDraggable(node, () => n.Available && Stats != null && Stats.IsLearned(n) && hud.Bar != null ? hud.Bar.Find(n.ability) : null, -1);
             node.RegisterCallback<ClickEvent>(_ =>
             {
                 if (Stats == null) return;
@@ -526,7 +792,7 @@ namespace AnimLab.KonoSuba
         {
             string state;
             if (!n.Available) state = "Coming soon.";
-            else if (Stats != null && Stats.IsLearned(n)) state = "Learned.";
+            else if (Stats != null && Stats.IsLearned(n)) state = "Learned — drag it to the hotbar.";
             else if (Stats != null && Stats.CanLearn(tree, n)) state = $"Click to learn ({SkillTrees.PointsPerNode} skill point).";
             else if (Stats != null && Stats.skillPoints < SkillTrees.PointsPerNode) state = "Not enough skill points.";
             else state = n.tier == 1 ? "" : n.tier == 2 ? "Requires the base skill." : "Requires one of the branch skills.";

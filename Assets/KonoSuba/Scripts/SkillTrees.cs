@@ -16,6 +16,49 @@ namespace AnimLab.KonoSuba
         public bool Available => ability != null;
     }
 
+    /// <summary>Estilos de espada (separador Weapon Arts da janela V).</summary>
+    public static class SwordStyles
+    {
+        public static readonly SwordStyle[] All =
+            { SwordStyle.Knight, SwordStyle.Fencer, SwordStyle.Reaper, SwordStyle.Daggers, SwordStyle.Greatsword, SwordStyle.Iaido };
+
+        public static bool Available(SwordStyle s) =>
+            s == SwordStyle.Knight || s == SwordStyle.Fencer || s == SwordStyle.Reaper || s == SwordStyle.Daggers || s == SwordStyle.Greatsword;
+
+        public static string Name(SwordStyle s) => s == SwordStyle.Daggers ? "Twin Daggers" : s.ToString();
+
+        public static string Description(SwordStyle s) => s switch
+        {
+            SwordStyle.Knight => "Wide slashes with a heavy overhead finisher. Balanced reach and stagger.",
+            SwordStyle.Fencer => "Sideways en garde, fast thrusts and a long Lunge. Wider parry window.",
+            SwordStyle.Iaido => "Sheathed stance and lightning-fast draw cuts.",
+            SwordStyle.Greatsword => "Huge, slow swings that break any guard. Hard to interrupt.",
+            SwordStyle.Reaper => "A long scythe. Wide reaping arcs that pull enemies toward you.",
+            SwordStyle.Daggers => "A dagger in each hand. Fast alternating cuts up close, ending in a twin stab.",
+            _ => ""
+        };
+
+        public static string Moves(SwordStyle s) => s switch
+        {
+            SwordStyle.Knight => "Slash · Backhand · Overhead",
+            SwordStyle.Fencer => "Thrust · Low Thrust · Lunge",
+            SwordStyle.Reaper => "Reap · Reverse Reap · Harvest",
+            SwordStyle.Daggers => "Cut ×4 · Twin Stab",
+            SwordStyle.Greatsword => "Cleave · Sweep · Guard Breaker",
+            _ => "Coming soon"
+        };
+
+        public static Color Accent(SwordStyle s) => s switch
+        {
+            SwordStyle.Knight => new Color(0.86f, 0.70f, 0.40f),
+            SwordStyle.Fencer => new Color(0.75f, 0.85f, 1f),
+            SwordStyle.Iaido => new Color(0.95f, 0.55f, 0.55f),
+            SwordStyle.Reaper => new Color(0.7f, 0.95f, 0.75f),
+            SwordStyle.Daggers => new Color(0.95f, 0.8f, 0.5f),
+            _ => new Color(0.9f, 0.45f, 0.3f)
+        };
+    }
+
     /// <summary>
     /// Árvores de habilidades, uma por elemento (Bíblia: Gelo, Terra, Fogo, Água, Eletricidade, Ar, Dark).
     /// Cada árvore é um V: base → dois ramos → final. O jogador escolhe duas árvores (CharacterStats).
