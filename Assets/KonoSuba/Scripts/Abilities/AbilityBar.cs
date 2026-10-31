@@ -53,7 +53,7 @@ namespace AnimLab.KonoSuba
 
             foreach (Ability a in abilities)
             {
-                if (!Input.GetKeyDown(KeyCode.Alpha1 + a.slot)) continue;
+                if (a.slot < 0 || a.slot >= 9 || !GameInput.GetDown((GameAction)((int)GameAction.Ability1 + a.slot))) continue;
                 if (hud != null) hud.selectedSlot = a.slot;
                 if (mana < a.manaCost || !a.IsReady) { if (hud != null) hud.Deny(a.slot); continue; }
                 if (a.TryCast(BuildContext())) mana -= a.manaCost;
@@ -77,7 +77,7 @@ namespace AnimLab.KonoSuba
             else
                 ctx.aimPoint = transform.position + transform.forward * 10f;
 
-            Vector2 axis = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+            Vector2 axis = GameInput.MoveAxis();
             if (axis.sqrMagnitude > 0.01f)
             {
                 float yaw = rig != null ? rig.yaw : (cam != null ? cam.transform.eulerAngles.y : 0f);

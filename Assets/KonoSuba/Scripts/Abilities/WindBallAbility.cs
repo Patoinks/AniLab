@@ -65,7 +65,7 @@ namespace AnimLab.KonoSuba
 
         void Reset()
         {
-            displayName = "Bola de Vento";
+            displayName = "Wind Ball";
             element = AbilityElement.Air;
             slot = 5;
             manaCost = 0f; // paga-se por rajada durante a canalização

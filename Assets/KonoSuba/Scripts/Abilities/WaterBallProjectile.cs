@@ -182,7 +182,7 @@ namespace AnimLab.KonoSuba
             // A segurar: a bola encolhe e fica densa; o volume de água é o mesmo (só muda o aspeto e a força).
             float held = stateTime;
             compression = held < ability.clickThreshold ? 0f
-                : Mathf.Clamp01((held - ability.clickThreshold) / ability.compressTime);
+                : Mathf.Clamp01((held - ability.clickThreshold) / (ability.compressTime / ability.CastSpeed));
             float e = 1f - (1f - compression) * (1f - compression);
             float shown = radius * Mathf.Lerp(1f, ability.compressedScale, e);
             jiggle = Mathf.Max(jiggle, 0.15f + compression * 0.25f);
@@ -314,6 +314,22 @@ namespace AnimLab.KonoSuba
                 else WaterPressureImpact.OnWater(c, velocity, ShownRadius, radius, ability);
             }
             else WaterImpactSurface.Spawn(c, velocity, ShownRadius, radius, compression, body, ability.impactMaterial);
+            Combatant hitBody = Combat.Of(body);
+            if (hitBody != null)
+            {
+                // Mais água = mais dano e mais empurrão; comprimida (lança) fura mais.
+                float size01 = Mathf.Clamp01(radius / Mathf.Max(ability.maxRadius, 0.01f));
+                float pierce = compression >= ability.pressureImpactFrom ? 1.4f : 1f;
+                Vector3 push = velocity; push.y = 0f;
+                hitBody.TakeHit(new HitInfo
+                {
+                    damage = Mathf.Lerp(ability.minDamage, ability.maxDamage, size01) * pierce * ability.SpellPower,
+                    element = AbilityElement.Water, status = StatusType.Wet, statusDuration = 6f,
+                    stagger = Mathf.Lerp(10f, 60f, size01) * pierce,
+                    knockback = push.normalized * Mathf.Lerp(2f, 8f, size01) + Vector3.up * Mathf.Lerp(0f, 2f, size01),
+                    point = c, source = caster
+                });
+            }
             Destroy(gameObject);
         }
     }

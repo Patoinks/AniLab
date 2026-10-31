@@ -11,6 +11,7 @@ namespace AnimLab.KonoSuba
     ///                             e recarga (AbilityBar preenche isto)
     /// </summary>
     [RequireComponent(typeof(UIDocument))]
+    [DefaultExecutionOrder(-50)] // Depois do UIDocument (-100), antes dos controlos do jogador.
     public class GameHud : MonoBehaviour
     {
         [Header("Valores")]
@@ -45,6 +46,31 @@ namespace AnimLab.KonoSuba
             cooldownElements[slot]?.MarkDirtyRepaint();
         }
 
+        static GameHud instance;
+
+        /// <summary>
+        /// O rato está em cima de algo do HUD que recebe cliques (janela de stats, hotbar, barras)?
+        /// Aí o clique esquerdo é da interface e não ataca.
+        /// </summary>
+        public static bool PointerOverUI
+        {
+            get
+            {
+                if (instance != null && instance.settingsMenu != null && instance.settingsMenu.IsBlockingInput) return true;
+                IPanel panel = instance != null ? instance.GetComponent<UIDocument>().rootVisualElement?.panel : null;
+                if (panel == null) return false;
+                Vector2 screen = new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
+                VisualElement picked = panel.Pick(RuntimePanelUtils.ScreenToPanel(panel, screen));
+                return picked != null && picked != instance.GetComponent<UIDocument>().rootVisualElement;
+            }
+        }
+
+        /// <summary>Janela das árvores de habilidades (tecla V).</summary>
+        public SkillTreeWindow Trees => skillTrees;
+
+        /// <summary>Janela do personagem (tecla C).</summary>
+        public StatsWindow Stats => statsWindow;
+
         /// <summary>Pisca o espaço a vermelho (sem mana ou em recarga).</summary>
         public void Deny(int slot)
         {
@@ -61,9 +87,15 @@ namespace AnimLab.KonoSuba
         FontDefinition font;
         bool hasFont; // sem fonte do sistema, fica a do tema por defeito
         GlowBar healthBar, manaBar;
+        CombatOverlay combat;
+        StatsWindow statsWindow;
+        SettingsMenu settingsMenu;
+        SkillTreeWindow skillTrees;
+        CharacterStats playerStats;
         Label healthText, manaText;
         readonly VisualElement[] slots = new VisualElement[9];
         readonly VisualElement[] slotGlows = new VisualElement[9];
+        readonly Label[] slotKeys = new Label[9];
         readonly System.Collections.Generic.List<VisualElement> glowing = new System.Collections.Generic.List<VisualElement>();
 
         /// <summary>
@@ -79,6 +111,7 @@ namespace AnimLab.KonoSuba
 
         void OnEnable()
         {
+            instance = this;
             LoadFont();
 
             VisualElement root = GetComponent<UIDocument>().rootVisualElement;
@@ -88,15 +121,33 @@ namespace AnimLab.KonoSuba
 
             BuildBars(root);
             BuildHotbar(root);
+            combat = new CombatOverlay(this, root);
+            statsWindow = new StatsWindow(this, root);
+            skillTrees = new SkillTreeWindow(this, root);
+            settingsMenu = new SettingsMenu(this, root);
+            GameInput.Rebound += RefreshBinding;
             Refresh();
+        }
+
+        void OnDisable()
+        {
+            GameInput.Rebound -= RefreshBinding;
+            settingsMenu?.Dispose();
+            settingsMenu = null;
+            combat?.Dispose();
+            combat = null;
         }
 
         void Update()
         {
+            settingsMenu?.Update();
             foreach (VisualElement e in glowing) e.MarkDirtyRepaint();
             if (selectedSlot != lastSelected) { lastSelected = selectedSlot; RefreshSlots(); }
             for (int i = 0; i < 9; i++)
                 if (Time.time - deniedAt[i] < 0.3f || cooldowns[i] > 0f) StyleSlot(i);
+            combat?.Update();
+            statsWindow?.Update();
+            skillTrees?.Update();
             Refresh();
         }
 
@@ -160,26 +211,44 @@ namespace AnimLab.KonoSuba
 
         void Refresh()
         {
+            // Mana: degradê entre as cores das duas árvores escolhidas (sem árvores, o azul de sempre).
+            if (playerStats == null) playerStats = FindFirstObjectByType<CharacterStats>();
+            if (playerStats != null && playerStats.ManaColors(out Color a, out Color b)) manaBar.SetColors(a, b);
+            else manaBar.SetColors(ManaColor, ManaColor);
             healthBar.SetValue(health / Mathf.Max(maxHealth, 1f));
             manaBar.SetValue(mana / Mathf.Max(maxMana, 1f));
             healthText.text = $"{Mathf.CeilToInt(health)} / {Mathf.CeilToInt(maxHealth)}";
             manaText.text = $"{Mathf.CeilToInt(mana)} / {Mathf.CeilToInt(maxMana)}";
         }
 
-        /// <summary>Barra fina com brilho: trilho ténue, halo em camadas, núcleo claro e ponta luminosa.</summary>
-        class GlowBar : VisualElement
+        /// <summary>
+        /// Barra fina com brilho: trilho ténue, halo em camadas, núcleo claro e ponta luminosa.
+        /// Com duas cores (SetColors) é um degradê ao longo da barra inteira (a cor fica presa à posição, não ao
+        /// preenchimento), com uma ondulação lenta a fazer as cores fundirem-se e recuarem.
+        /// </summary>
+        internal class GlowBar : VisualElement
         {
-            readonly Color color;
+            Color color, colorB;
+            bool gradient;
             readonly float thickness, seed;
             float value = -1f;
 
             public GlowBar(Color color, float thickness, float seed)
             {
-                this.color = color;
+                this.color = colorB = color;
                 this.thickness = thickness;
                 this.seed = seed;
                 pickingMode = PickingMode.Ignore;
                 generateVisualContent += Draw;
+            }
+
+            public void SetColors(Color a, Color b)
+            {
+                if (a == color && b == colorB) return;
+                color = a;
+                colorB = b;
+                gradient = a != b;
+                MarkDirtyRepaint();
             }
 
             public void SetValue(float v)
@@ -201,6 +270,8 @@ namespace AnimLab.KonoSuba
                 Line(p, x0, x1, y, thickness, new Color(1f, 1f, 1f, 0.1f));
                 if (value <= 0f) return;
 
+                if (gradient) { DrawGradient(p, x0, x1, xf, y); return; }
+
                 // Halo: traços largos e transparentes por baixo do núcleo, a pulsar de forma irregular.
                 float k = Pulse(seed);
                 Line(p, x0, xf, y, thickness * 9f * k, new Color(color.r, color.g, color.b, 0.05f * k));
@@ -219,6 +290,56 @@ namespace AnimLab.KonoSuba
                 p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 2f, 0, 360); p.Fill();
                 p.fillColor = Color.Lerp(color, Color.white, 0.8f);
                 p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 0.8f, 0, 360); p.Fill();
+            }
+
+            // Cor na posição x da barra: degradê suave de color para colorB, com uma ondulação lenta.
+            Color At(float x, float x0, float x1)
+            {
+                float t = Mathf.InverseLerp(x0, x1, x);
+                t += Mathf.Sin(Time.time * 0.9f + t * 4f + seed) * 0.07f;
+                t = Mathf.Clamp01(t);
+                return Color.Lerp(color, colorB, t * t * (3f - 2f * t));
+            }
+
+            void DrawGradient(Painter2D p, float x0, float x1, float xf, float y)
+            {
+                float k = Pulse(seed);
+                GradientStroke(p, x0, x1, xf, y, thickness * 9f * k, 0.05f * k, 0f);
+                GradientStroke(p, x0, x1, xf, y, thickness * 6f, 0.09f * k, 0f);
+                GradientStroke(p, x0, x1, xf, y, thickness * 3.6f, 0.18f * k, 0f);
+                GradientStroke(p, x0, x1, xf, y, thickness * 2f, 0.38f * k, 0f);
+                GradientStroke(p, x0, x1, xf, y, thickness, 1f, 0f);
+                GradientStroke(p, x0, x1, xf, y, thickness * 0.4f, 1f, 0.7f);
+
+                Color c = At(xf, x0, x1);
+                float tip = Pulse(seed + 41f);
+                p.fillColor = new Color(c.r, c.g, c.b, 0.15f * tip);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 3.6f * tip, 0, 360); p.Fill();
+                p.fillColor = new Color(c.r, c.g, c.b, 0.35f * tip);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 2f, 0, 360); p.Fill();
+                p.fillColor = Color.Lerp(c, Color.white, 0.8f);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), thickness * 0.8f, 0, 360); p.Fill();
+            }
+
+            // Traço em segmentos de pontas retas (sem sobreposições, que somariam alfa) com meias-luas nas pontas.
+            void GradientStroke(Painter2D p, float x0, float x1, float xf, float y, float width, float alpha, float whiten)
+            {
+                int n = Mathf.Clamp(Mathf.CeilToInt((xf - x0) / 5f), 1, 60);
+                p.lineCap = LineCap.Butt;
+                p.lineWidth = width;
+                for (int i = 0; i < n; i++)
+                {
+                    float a = Mathf.Lerp(x0, xf, i / (float)n), b = Mathf.Lerp(x0, xf, (i + 1) / (float)n);
+                    Color c = Color.Lerp(At((a + b) * 0.5f, x0, x1), Color.white, whiten);
+                    p.strokeColor = new Color(c.r, c.g, c.b, alpha);
+                    p.BeginPath(); p.MoveTo(new Vector2(a, y)); p.LineTo(new Vector2(b, y)); p.Stroke();
+                }
+                Color s = Color.Lerp(At(x0, x0, x1), Color.white, whiten), e = Color.Lerp(At(xf, x0, x1), Color.white, whiten);
+                p.fillColor = new Color(s.r, s.g, s.b, alpha);
+                p.BeginPath(); p.Arc(new Vector2(x0, y), width * 0.5f, 90f, 270f); p.ClosePath(); p.Fill();
+                p.fillColor = new Color(e.r, e.g, e.b, alpha);
+                p.BeginPath(); p.Arc(new Vector2(xf, y), width * 0.5f, -90f, 90f); p.ClosePath(); p.Fill();
+                p.lineCap = LineCap.Round;
             }
 
             static void Line(Painter2D p, float a, float b, float y, float width, Color c)
@@ -373,12 +494,23 @@ namespace AnimLab.KonoSuba
             slot.Add(cd);
             cooldownElements[index] = cd;
 
-            var num = MakeLabel((index + 1).ToString(), 14);
+            var num = MakeLabel(GameInput.Label(GameInput.Key((GameAction)((int)GameAction.Ability1 + index))), 14);
             num.style.marginTop = 7;
+            num.style.maxWidth = 54;
+            num.style.overflow = Overflow.Hidden;
+            num.style.textOverflow = TextOverflow.Ellipsis;
+            slotKeys[index] = num;
             col.Add(num);
 
             StyleSlot(index);
             return col;
+        }
+
+        void RefreshBinding(GameAction action, KeyCode key)
+        {
+            int index = (int)action - (int)GameAction.Ability1;
+            if (index >= 0 && index < slotKeys.Length && slotKeys[index] != null)
+                slotKeys[index].text = GameInput.Label(key);
         }
 
         void RefreshSlots()
@@ -567,7 +699,7 @@ namespace AnimLab.KonoSuba
 
         // ------------------------------------------------------------------ Utilitários
 
-        Label MakeLabel(string text, int size)
+        internal Label MakeLabel(string text, int size)
         {
             var l = new Label(text) { pickingMode = PickingMode.Ignore };
             if (hasFont) l.style.unityFontDefinition = font;

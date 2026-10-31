@@ -725,6 +725,7 @@ namespace AnimLab.KonoSuba.EditorTools
 
             BuildDummyEnemy();
             BuildHotbarVFX(player);
+            SwordSetup.Build();
             return player.transform;
         }
 
@@ -739,7 +740,7 @@ namespace AnimLab.KonoSuba.EditorTools
             GameObject wind = Template(GameObject.Find("WindTest"), "Tornado de Vento (modelo)", templates.transform);
 
             var fireTornado = player.AddComponent<SummonAbility>();
-            fireTornado.displayName = "Tornado de Fogo";
+            fireTornado.displayName = "Fire Tornado";
             fireTornado.element = AbilityElement.Fire;
             fireTornado.slot = 6;
             fireTornado.manaCost = 40f;
@@ -748,7 +749,7 @@ namespace AnimLab.KonoSuba.EditorTools
             fireTornado.glyph = GameHud.Glyph.Fire;
 
             var windTornado = player.AddComponent<SummonAbility>();
-            windTornado.displayName = "Tornado de Vento";
+            windTornado.displayName = "Wind Tornado";
             windTornado.element = AbilityElement.Air;
             windTornado.slot = 7;
             windTornado.manaCost = 35f;
@@ -757,7 +758,7 @@ namespace AnimLab.KonoSuba.EditorTools
             windTornado.glyph = GameHud.Glyph.Wind;
 
             var thunder = player.AddComponent<ThunderAbility>();
-            thunder.displayName = "Trovão";
+            thunder.displayName = "Thunder";
             thunder.element = AbilityElement.Lightning;
             thunder.slot = 8;
             thunder.manaCost = 30f;
@@ -874,8 +875,9 @@ namespace AnimLab.KonoSuba.EditorTools
             mr.shadowCastingMode = ShadowCastingMode.Off;
 
             var target = enemy.AddComponent<LockOnTarget>();
-            target.displayName = "Boneco de treino";
+            target.displayName = "Training Dummy";
             target.lockMarker = marker;
+            enemy.AddComponent<Combatant>();
         }
 
         // Habilidades: 1 = Dash, 2 = Bola de Água, 3 = Raio, 4 = Kirin, 5 = Bola de Fogo.
@@ -889,7 +891,7 @@ namespace AnimLab.KonoSuba.EditorTools
             dash.cooldown = 1.2f;
 
             var ball = player.AddComponent<WaterBallAbility>();
-            ball.displayName = "Bola de Água";
+            ball.displayName = "Water Ball";
             ball.element = AbilityElement.Water;
             ball.slot = 1;
             ball.manaCost = 0f; // canalizada: cada bolinha custa 1 de mana
@@ -902,7 +904,7 @@ namespace AnimLab.KonoSuba.EditorTools
             ball.veilMaterial = SaveMaterial("WaterPressureVeil", "KonoSuba/WaterPressureVeil");
 
             var bolt = player.AddComponent<LightningAbility>();
-            bolt.displayName = "Raio";
+            bolt.displayName = "Lightning";
             bolt.element = AbilityElement.Lightning;
             bolt.slot = 2;
             bolt.manaCost = 30f;
@@ -961,7 +963,7 @@ namespace AnimLab.KonoSuba.EditorTools
             if (fire == null)
             {
                 fire = Undo.AddComponent<FireBallAbility>(player);
-                fire.displayName = "Bola de Fogo";
+                fire.displayName = "Fireball";
                 fire.element = AbilityElement.Fire;
                 fire.slot = 4;
                 fire.manaCost = 25f;

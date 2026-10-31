@@ -2,7 +2,8 @@ using UnityEngine;
 
 namespace AnimLab.KonoSuba
 {
-    public enum AbilityElement { Neutral, Water, Lightning, Fire, Air }
+    // (novos elementos só no fim: os valores ficam guardados como números nas cenas)
+    public enum AbilityElement { Neutral, Water, Lightning, Fire, Air, Earth, Ice, Dark }
 
     /// <summary>
     /// Base das habilidades. Cada habilidade é um componente no player; a AbilityBar trata das teclas,
@@ -10,7 +11,7 @@ namespace AnimLab.KonoSuba
     /// </summary>
     public abstract class Ability : MonoBehaviour
     {
-        public string displayName = "Habilidade";
+        public string displayName = "Ability";
         public AbilityElement element = AbilityElement.Neutral;
         [Tooltip("Espaço da barra (0 = tecla 1).")]
         public int slot;
@@ -18,6 +19,22 @@ namespace AnimLab.KonoSuba
         public float cooldown = 1f;
 
         float readyAt;
+        CharacterStats stats;
+        bool statsLooked;
+
+        /// <summary>Ficha do lançador (só o player tem): velocidade de lançamento, poder mágico, recarga.</summary>
+        public CharacterStats Stats
+        {
+            get
+            {
+                if (!statsLooked) { stats = GetComponent<CharacterStats>(); statsLooked = true; }
+                return stats;
+            }
+        }
+        /// <summary>Formações e canalizações correm este fator mais depressa.</summary>
+        public float CastSpeed => Stats != null ? Stats.CastSpeed : 1f;
+        /// <summary>Multiplicador do dano das magias (ataque mágico).</summary>
+        public float SpellPower => Stats != null ? Stats.SpellScale : 1f;
 
         public float CooldownRemaining01 => cooldown <= 0f ? 0f : Mathf.Clamp01((readyAt - Time.time) / cooldown);
         public bool IsReady => Time.time >= readyAt;
@@ -26,7 +43,7 @@ namespace AnimLab.KonoSuba
         public bool TryCast(AbilityContext ctx)
         {
             if (!IsReady || !Cast(ctx)) return false;
-            readyAt = Time.time + cooldown;
+            readyAt = Time.time + cooldown * (1f - (Stats != null ? Stats.CooldownReduction : 0f));
             return true;
         }
 

@@ -70,7 +70,7 @@ namespace AnimLab.KonoSuba
             elapsed += dt;
 
             bool water = WaterSim.HasWaterAt(caster.position);
-            float rate = ability.channelDropletsPerSecond;
+            float rate = ability.channelDropletsPerSecond * ability.CastSpeed;
             if (!water) rate /= ability.generatedTimeMultiplier;
 
             spawnDebt += rate * dt;

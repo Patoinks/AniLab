@@ -1,5 +1,7 @@
 // Superfície PBR (URP) que pode ficar molhada só onde a água tocou (WetSurface passa as manchas):
 // a zona molhada fica mais escura e muito mais brilhante, com escorrências que descem a partir de cada mancha.
+// Opcional (_VertexColor = 1): a cor vem das cores dos vértices (sRGB), como no boneco de treino do Blender;
+// onde o alfa do vértice é 1 (tecido) pinta-se o alvo do peito em espaço do objeto (_Ring*).
 Shader "KonoSuba/Wettable"
 {
     Properties
@@ -8,6 +10,10 @@ Shader "KonoSuba/Wettable"
         _Glossiness ("Suavidade", Range(0, 1)) = 0.3
         _Metallic ("Metálico", Range(0, 1)) = 0
         _WetRunoff ("Comprimento das escorrências (m)", Float) = 0.7
+        [Toggle] _VertexColor ("Cor dos vértices (sRGB)", Float) = 0
+        _RingColor ("Cor do alvo", Color) = (0.545, 0.263, 0.192, 1)
+        _RingCenter ("Alvo: centro (x, altura), frente (sinal de z, limite)", Vector) = (0, 1.19, 1, 0.1)
+        _RingRadii ("Alvo: raios (anel fora, anel dentro, ponto)", Vector) = (0.169, 0.122, 0.059, 0)
     }
     SubShader
     {
@@ -35,16 +41,18 @@ Shader "KonoSuba/Wettable"
             #define WET_SPOTS 16
             float4 _WetSpots[WET_SPOTS];   // xyz mundo, w raio
             float _WetAmounts[WET_SPOTS];  // 0..1 (seca com o tempo)
-            float4 _Color;
-            float _Glossiness, _Metallic, _WetRunoff;
+            float4 _Color, _RingColor, _RingCenter, _RingRadii;
+            float _Glossiness, _Metallic, _WetRunoff, _VertexColor;
 
-            struct Attributes { float4 positionOS : POSITION; float3 normalOS : NORMAL; };
+            struct Attributes { float4 positionOS : POSITION; float3 normalOS : NORMAL; float4 color : COLOR; };
             struct Varyings
             {
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
                 float fogCoord : TEXCOORD2;
+                float3 positionOS : TEXCOORD3;
+                float4 color : COLOR;
             };
 
             Varyings vert(Attributes v)
@@ -54,6 +62,8 @@ Shader "KonoSuba/Wettable"
                 o.positionCS = TransformWorldToHClip(o.positionWS);
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
                 o.fogCoord = ComputeFogFactor(o.positionCS.z);
+                o.positionOS = v.positionOS.xyz;
+                o.color = v.color;
                 return o;
             }
 
@@ -98,8 +108,21 @@ Shader "KonoSuba/Wettable"
                 input.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
                 input.shadowMask = half4(1, 1, 1, 1);
 
+                float3 baseColor = _Color.rgb;
+                if (_VertexColor > 0.5)
+                {
+                    baseColor *= SRGBToLinear(i.color.rgb);
+                    // Alvo pintado no tecido: anel e ponto, só na frente do peito.
+                    float r = length(float2(i.positionOS.x - _RingCenter.x, i.positionOS.y - _RingCenter.y));
+                    float aa = fwidth(r);
+                    float ring = smoothstep(_RingRadii.y - aa, _RingRadii.y + aa, r) * (1.0 - smoothstep(_RingRadii.x - aa, _RingRadii.x + aa, r));
+                    float dot0 = 1.0 - smoothstep(_RingRadii.z - aa, _RingRadii.z + aa, r);
+                    float front = step(_RingCenter.w, i.positionOS.z * _RingCenter.z);
+                    baseColor = lerp(baseColor, _RingColor.rgb, saturate(ring + dot0) * front * step(0.5, i.color.a));
+                }
+
                 SurfaceData surface = (SurfaceData)0;
-                surface.albedo = _Color.rgb * lerp(1.0, 0.4, wet);
+                surface.albedo = baseColor * lerp(1.0, 0.4, wet);
                 surface.metallic = _Metallic;
                 surface.smoothness = lerp(_Glossiness, 0.95, wet);
                 surface.normalTS = half3(0, 0, 1);

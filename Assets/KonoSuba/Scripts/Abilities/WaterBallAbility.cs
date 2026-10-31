@@ -65,6 +65,9 @@ namespace AnimLab.KonoSuba
         [Tooltip("Multiplicador da gravidade durante o voo.")]
         public float gravityScale = 1f;
         public float maxRange = 35f;
+        [Header("Golpe")]
+        [Tooltip("Dano da bola mais pequena e da maior (a lança comprimida faz +40%).")]
+        public float minDamage = 15f, maxDamage = 70f;
 
         [Header("Aspeto")]
         [Tooltip("Material da água (bola e bolinhas que se juntam a ela).")]
@@ -72,7 +75,7 @@ namespace AnimLab.KonoSuba
 
         void Reset()
         {
-            displayName = "Bola de Água";
+            displayName = "Water Ball";
             element = AbilityElement.Water;
             slot = 1;
             manaCost = 0f; // paga-se por bolinha durante a canalização
