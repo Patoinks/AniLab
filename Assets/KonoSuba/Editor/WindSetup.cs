@@ -32,7 +32,7 @@ namespace AnimLab.KonoSuba.EditorTools
             if (wind == null)
             {
                 wind = player.AddComponent<WindBallAbility>();
-                wind.displayName = "Bola de Vento";
+                wind.displayName = "Wind Ball";
                 wind.element = AbilityElement.Air;
                 wind.slot = 5;
                 wind.manaCost = 0f;

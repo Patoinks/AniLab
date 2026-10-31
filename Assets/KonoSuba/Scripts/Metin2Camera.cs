@@ -65,10 +65,10 @@ namespace AnimLab.KonoSuba
             if (lockOn != null)
             {
                 if (Input.GetMouseButtonDown(1) && hovered != null) lockOn.Select(hovered);
-                if (Input.GetKeyDown(KeyCode.Escape)) lockOn.Release();
+                if (GameInput.GetDown(GameAction.ReleaseTarget)) lockOn.Release();
             }
 
-            Vector2 axis = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+            Vector2 axis = GameInput.MoveAxis();
             if (axis.sqrMagnitude > 0.01f)
                 cmd.wish = Vector3.ClampMagnitude(Quaternion.Euler(0f, yaw, 0f) * new Vector3(axis.x, 0f, axis.y), 1f);
             return cmd;

@@ -25,14 +25,37 @@ namespace AnimLab.KonoSuba.EditorTools
     /// Peças só para a captura (não ficam na cena guardada): -captureCall Namespace.Classe.Metodo (estático, sem argumentos).
     /// Cenário neutro: -captureLookdev 1. Câmara: -captureCamPreset ConceptMain (argumentos explícitos prevalecem).
     /// Comparação: -captureCompare imagem [-captureCompareFrame N] (por omissão, o frame do meio).
+    /// HUD por cima (placas, números de dano, barras): -captureHud 1.
+    /// Todos os estados no alvo da habilidade, no frame N (para ver os ícones): -captureAllStatusAt N.
+    /// Player num ponto, virado para o alvo (durante o aquecimento): -capturePlayerAt x,y,z.
+    /// Ataques de espada do Player nos frames dados (Espaço): -captureAttacks "10,16,22".
+    /// Janela de stats aberta, a passar pelos separadores (um a cada 2 frames): -captureStats 1.
+    /// Árvores (tecla V): -captureSkills 1 — escolha Lightning + Fire nos frames 0–5, confirmada no 6, nós
+    /// aprendidos no 8; no fim a escolha é desfeita (não fica nas PlayerPrefs do jogo).
+    /// Duelista sempre a guardar (sem AI): -captureDuelistGuard 1.
+    /// Estilo de espada do Player durante a gravação: -captureStyle Fencer (no fim volta ao Knight).
+    /// Salto / roll do Player nos frames dados: -captureJump "10,40" -captureRoll "30". Desligar objetos: -captureDisable "Duelist".
+    /// Guarda do Player (F) em intervalos de frames: -captureGuard "30-60,90-95". Semente: -captureSeed 7.
+    /// (com -captureAttacks ou -captureGuard o Player deixa de ler o teclado; os callouts vão para o log)
+    /// Duelo: -captureBetween Player enquadra o alvo e este objeto de lado (perpendicular à linha entre eles),
+    /// a -captureDistance (7) m e -captureHeight (2.2) m; a câmara segue-os suavemente. Golpes vão para o log.
+    /// A Bola de Água é canalizada: na captura dispara sozinha -captureWaterHold frames depois (30), solta.
     /// </summary>
     public static class VFXCapture
     {
         const string Flag = "VFXCapture.Active";
         static int frames, index, lastFrame = -1;
         static int casts;
+        static Vector3 smoothCam;
+        static bool hasSmoothCam;
         static RenderTexture hdr, ldr;
         static Texture2D tex;
+        static RenderTexture ui;
+        static Texture2D uiTex;
+        static WaterBallProjectile pendingWater;
+        static LockOnTarget pendingTarget;
+        static Vector3 pendingAim;
+        static int waterLaunchAt;
 
         [InitializeOnLoadMethod]
         static void Resume() { if (SessionState.GetBool(Flag, false)) EditorApplication.update += Tick; }
@@ -149,13 +172,33 @@ namespace AnimLab.KonoSuba.EditorTools
             var rig = cam.GetComponent<Metin2Camera>();
             if (rig != null) rig.enabled = false;
             Time.captureFramerate = 30;
+            // (cedo, para os pés e a câmara assentarem antes de gravar)
+            if (frames == 2 && Arg("-capturePlayerAt", null) != null) PlacePlayer(V("-capturePlayerAt", Vector3.zero));
+            if (frames == 1) Scripted();
             if (++frames < (int)F("-captureWarmup", 40)) return;
 
             Vector3 c = target.transform.position;
             bool concept = Arg("-captureCamPreset", "") == "ConceptMain";
             cam.fieldOfView = F("-captureFov", 40f);
-            cam.transform.position = c + V("-captureOffset", concept ? new Vector3(0f, 5.5f, -11f) : new Vector3(0f, 1.2f, -8f));
-            cam.transform.LookAt(c + Vector3.up * F("-captureLook", concept ? 1.2f : 2f));
+            GameObject second = Arg("-captureBetween", null) != null ? GameObject.Find(Arg("-captureBetween", null)) : null;
+            if (second != null)
+            {
+                Vector3 mid = (c + second.transform.position) * 0.5f;
+                Vector3 line = second.transform.position - c; line.y = 0f;
+                Vector3 perp = line.sqrMagnitude > 1e-4f ? Vector3.Cross(Vector3.up, line.normalized) : Vector3.right;
+                // Fica do lado em que já estava (não salta para o outro lado quando eles trocam de posição).
+                if (hasSmoothCam && Vector3.Dot(perp, smoothCam - mid) < 0f) perp = -perp;
+                Vector3 want = mid + perp * F("-captureDistance", 7f) + Vector3.up * F("-captureHeight", 2.2f);
+                smoothCam = hasSmoothCam ? Vector3.Lerp(smoothCam, want, 0.08f) : want;
+                hasSmoothCam = true;
+                cam.transform.position = smoothCam;
+                cam.transform.LookAt(mid + Vector3.up * F("-captureLook", 1f));
+            }
+            else
+            {
+                cam.transform.position = c + V("-captureOffset", concept ? new Vector3(0f, 5.5f, -11f) : new Vector3(0f, 1.2f, -8f));
+                cam.transform.LookAt(c + Vector3.up * F("-captureLook", concept ? 1.2f : 2f));
+            }
 
             string list = Arg("-captureCast", null);
             if (list != null)
@@ -171,11 +214,77 @@ namespace AnimLab.KonoSuba.EditorTools
                 }
             }
 
+            foreach (string a in Arg("-captureAttacks", "").Split(','))
+                if (a.Length > 0 && int.Parse(a) == index)
+                    GameObject.Find("Player")?.GetComponent<SwordWielder>()?.RequestAttack();
+            string guards = Arg("-captureGuard", null);
+            if (guards != null)
+            {
+                bool held = false;
+                foreach (string g in guards.Split(','))
+                {
+                    string[] r = g.Split('-');
+                    if (r.Length == 2 && index >= int.Parse(r[0]) && index <= int.Parse(r[1])) held = true;
+                }
+                var sw = GameObject.Find("Player")?.GetComponent<SwordWielder>();
+                if (sw != null) sw.guardHeld = held;
+            }
+
+            if (index == 0)
+                foreach (string n in Arg("-captureDisable", "").Split(','))
+                    if (n.Length > 0) GameObject.Find(n)?.SetActive(false);
+            var mover = GameObject.Find("Player")?.GetComponent<CapsulePlayer>();
+            foreach (string a in Arg("-captureJump", "").Split(','))
+                if (a.Length > 0 && int.Parse(a) == index && mover != null) mover.Jump();
+            foreach (string a in Arg("-captureRoll", "").Split(','))
+                if (a.Length > 0 && int.Parse(a) == index && mover != null) mover.Roll(mover.transform.forward);
+            if (Arg("-captureSkills", "0") == "1") SkillsStep();
+            // Duelista parado a guardar (para testar bloqueios e o Guard Breaker).
+            if (Arg("-captureDuelistGuard", "0") == "1")
+            {
+                GameObject d = GameObject.Find("Duelist");
+                if (d != null)
+                {
+                    var ai = d.GetComponent<DuelistAI>();
+                    if (ai != null && ai.enabled) { ai.enabled = false; d.GetComponent<CapsulePlayer>().aiWish = Vector3.zero; }
+                    var dw = d.GetComponent<SwordWielder>();
+                    if (dw != null) dw.guardHeld = true;
+                }
+            }
+            if (index == 0 && Arg("-captureStyle", null) != null)
+                UnityEngine.Object.FindFirstObjectByType<CharacterStats>()?.SetSwordStyle((SwordStyle)Enum.Parse(typeof(SwordStyle), Arg("-captureStyle", "Knight")));
+
+            if (Arg("-captureStats", "0") == "1")
+            {
+                var hud = UnityEngine.Object.FindFirstObjectByType<GameHud>();
+                if (hud != null && hud.Stats != null)
+                {
+                    if (!hud.Stats.IsOpen) hud.Stats.SetOpen(true);
+                    hud.Stats.SelectTab(Mathf.Min(index / 2, 2));
+                }
+            }
+
+            if (index == (int)F("-captureAllStatusAt", -1))
+            {
+                var dummy = GameObject.Find(Arg("-captureCastTarget", "DummyEnemy"));
+                var body = dummy != null ? dummy.GetComponent<Combatant>() : null;
+                if (body != null)
+                    foreach (StatusType st in Enum.GetValues(typeof(StatusType)))
+                        if (st != StatusType.None) body.ApplyStatus(st, 8f);
+            }
+
+            if (pendingWater != null && index >= waterLaunchAt)
+            {
+                pendingWater.Launch(pendingTarget, pendingAim, 0f);
+                pendingWater = null;
+            }
+
             int count = (int)F("-captureFrames", 120);
             string dir = Arg("-captureOut", "Logs/cap/captura");
             Shot(cam, count == 1 ? dir + ".png" : Path.Combine(dir, "f_" + index.ToString("D4") + ".png"));
             if (++index < count) return;
 
+            if (Arg("-captureSkills", "0") == "1" || Arg("-captureStyle", null) != null) RestoreProgress();
             if (count > 1) Encode(dir);
             string reference = Arg("-captureCompare", null);
             if (reference != null) Compare(dir, count, reference);
@@ -200,6 +309,74 @@ namespace AnimLab.KonoSuba.EditorTools
             catch (Exception e) { Debug.LogError("VFXCapture: falhou a comparação (" + e.Message + ")"); }
         }
 
+        static void SkillsStep()
+        {
+            var hud = UnityEngine.Object.FindFirstObjectByType<GameHud>();
+            var stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
+            if (hud == null || hud.Trees == null || stats == null) return;
+            if (index == 0) { stats.ResetTrees(); hud.Trees.SetOpen(true); }
+            if (index == 1) hud.Trees.Preview(AbilityElement.Lightning, AbilityElement.Fire);
+            if (index == 6) stats.ChooseTrees(AbilityElement.Lightning, AbilityElement.Fire);
+            if (index == 8)
+                foreach (string id in new[] { "light1", "light2a", "fire1" })
+                    foreach (AbilityElement e in new[] { AbilityElement.Lightning, AbilityElement.Fire })
+                        foreach (SkillNode n in SkillTrees.Of(e))
+                            if (n.id == id) stats.Learn(e, n);
+            // (o arrastar para a hotbar faz Place; aqui chama-se direto)
+            if (index == 10 && hud.Bar != null)
+            {
+                hud.Bar.Place(0, hud.Bar.Find("Dash"));
+                hud.Bar.Place(1, hud.Bar.Find("Lightning"));
+                hud.Bar.Place(2, hud.Bar.Find("Thunder"));
+                hud.Bar.Place(3, hud.Bar.Find("Fireball"));
+            }
+            if (index == 12) hud.Trees.SelectTab(1);
+            if (index == 14) stats.SetSwordStyle(SwordStyle.Fencer);
+        }
+
+        // No fim: a hotbar, as árvores e o estilo voltam ao que eram (não ficam nas PlayerPrefs do jogo).
+        static void RestoreProgress()
+        {
+            var stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
+            var bar = UnityEngine.Object.FindFirstObjectByType<AbilityBar>();
+            if (bar != null) for (int i = 0; i < 9; i++) bar.Clear(i);
+            if (stats != null) { stats.ResetTrees(); stats.SetSwordStyle(SwordStyle.Knight); }
+        }
+
+        // Player guiado pela gravação (sem teclado), semente fixa e callouts no log.
+        static void Scripted()
+        {
+            Combat.LogCallouts = true;
+            DuelistAI.LogDecisions = true;
+            Combatant.AnyHit += (c, h) => Debug.Log($"[HIT] {Time.frameCount} {(h.source != null ? h.source.name : "?")} -> {c.name} {h.damage:0.#}{(h.critical ? " crit" : "")} hp {c.health:0}/{c.maxHealth:0}{(c.IsStaggered ? " STAGGER" : "")}");
+            SwordWielder.AnyGuarded += (a, d, parry) => Debug.Log($"[GUARD] {Time.frameCount} {d.name} {(parry ? "PARRY" : "BLOCK")} {a.name}");
+            SwordWielder.AnyClash += (a, b) => Debug.Log($"[CLASH] {Time.frameCount} {a.name} x {b.name}");
+            if (Arg("-captureSeed", null) != null) UnityEngine.Random.InitState((int)F("-captureSeed", 1));
+            if (Arg("-captureAttacks", null) == null && Arg("-captureGuard", null) == null) return;
+            var sw = GameObject.Find("Player")?.GetComponent<SwordWielder>();
+            if (sw != null) sw.playerControlled = false;
+        }
+
+        static void PlacePlayer(Vector3 at)
+        {
+            GameObject player = GameObject.Find("Player");
+            if (player == null) return;
+            var cc = player.GetComponent<CharacterController>();
+            if (cc != null) cc.enabled = false;
+            player.transform.position = at;
+            GameObject t = GameObject.Find(Arg("-captureCastTarget", "DummyEnemy"));
+            if (t != null)
+            {
+                Vector3 d = t.transform.position - at; d.y = 0f;
+                if (d.sqrMagnitude > 0.01f) player.transform.rotation = Quaternion.LookRotation(d);
+                // Alvo selecionado: a guarda vira-se para ele.
+                var lockOn = player.GetComponent<LockOn>();
+                var lt = t.GetComponent<LockOnTarget>();
+                if (lockOn != null && lt != null) lockOn.Select(lt);
+            }
+            if (cc != null) cc.enabled = true;
+        }
+
         static void Cast(string name, Vector3? offset)
         {
             GameObject player = GameObject.Find("Player");
@@ -215,6 +392,13 @@ namespace AnimLab.KonoSuba.EditorTools
                 {
                     Debug.Log("VFXCapture: " + name + " lançado: "
                               + a.TryCast(new AbilityContext { caster = player.transform, target = lockOn, aimPoint = aim }));
+                    if (a is WaterBallAbility)
+                    {
+                        pendingWater = UnityEngine.Object.FindFirstObjectByType<WaterBallProjectile>();
+                        pendingTarget = lockOn;
+                        pendingAim = aim + Vector3.up * 1.1f;
+                        waterLaunchAt = index + (int)F("-captureWaterHold", 30);
+                    }
                     return;
                 }
         }
@@ -228,16 +412,52 @@ namespace AnimLab.KonoSuba.EditorTools
                 ldr = new RenderTexture(W, H, 0);
                 tex = new Texture2D(W, H, TextureFormat.RGB24, false);
             }
+            // A câmara fica a apontar para o alvo da captura: assim os efeitos que leem o tamanho da câmara
+            // (ex.: o reflexo da água, criado no LateUpdate) usam 1920×1080 e não o tamanho da janela do batchmode.
             cam.targetTexture = hdr;
             cam.Render();
-            cam.targetTexture = null;
             Graphics.Blit(hdr, ldr);
             RenderTexture.active = ldr;
             tex.ReadPixels(new Rect(0, 0, W, H), 0, 0);
             tex.Apply();
             RenderTexture.active = null;
+            if (Arg("-captureHud", "0") == "1") CompositeHud(W, H);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
             File.WriteAllBytes(path, tex.EncodeToPNG());
+        }
+
+        // O painel do HUD passa a desenhar numa textura (cópia das PanelSettings, para não mexer no asset);
+        // a textura traz o frame anterior do HUD, composto por cima da imagem (alfa pré-multiplicado).
+        static void CompositeHud(int w, int h)
+        {
+            if (ui == null)
+            {
+                var doc = UnityEngine.Object.FindFirstObjectByType<UnityEngine.UIElements.UIDocument>();
+                if (doc == null || doc.panelSettings == null) return;
+                ui = new RenderTexture(w, h, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                uiTex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                var settings = UnityEngine.Object.Instantiate(doc.panelSettings);
+                settings.targetTexture = ui;
+                settings.clearColor = true;
+                settings.colorClearValue = Color.clear;
+                doc.panelSettings = settings;
+                return; // o painel só desenha na textura a partir do próximo frame
+            }
+            RenderTexture.active = ui;
+            uiTex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+            uiTex.Apply();
+            RenderTexture.active = null;
+            Color32[] a = tex.GetPixels32(), b = uiTex.GetPixels32();
+            for (int i = 0; i < a.Length; i++)
+            {
+                int k = 255 - b[i].a;
+                if (k == 255) continue;
+                a[i].r = (byte)Mathf.Min(255, b[i].r + a[i].r * k / 255);
+                a[i].g = (byte)Mathf.Min(255, b[i].g + a[i].g * k / 255);
+                a[i].b = (byte)Mathf.Min(255, b[i].b + a[i].b * k / 255);
+            }
+            tex.SetPixels32(a);
+            tex.Apply();
         }
 
         // MP4 ao lado da pasta dos frames, se o ffmpeg estiver no PATH.

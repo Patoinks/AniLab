@@ -7,9 +7,11 @@ namespace AnimLab.KonoSuba
     /// Reflexo planar (espelho) para o chão de água: renderiza a cena espelhada no plano do objeto
     /// para uma RenderTexture e publica-a como textura global _ReflectionTex (chão e malha simulada usam-na).
     /// URP: a câmara do reflexo é renderizada no LateUpdate, antes do frame (dentro do render da câmara
-    /// principal, como no Built-in, o URP não aceita outra câmara).
+    /// principal, como no Built-in, o URP não aceita outra câmara). Corre depois de todos os outros
+    /// LateUpdate (a câmara do jogo também se move aí): senão o reflexo usava a câmara do frame anterior
+    /// e escorregava pelo chão ao mexer a câmara.
     /// </summary>
-    [ExecuteAlways, RequireComponent(typeof(Renderer))]
+    [ExecuteAlways, RequireComponent(typeof(Renderer)), DefaultExecutionOrder(10000)]
     public class PlanarReflection : MonoBehaviour
     {
         [Range(0.25f, 1f)] public float resolutionScale = 1f;
@@ -80,7 +82,8 @@ namespace AnimLab.KonoSuba
             reflectionTexture = new RenderTexture(w, h, 24, RenderTextureFormat.ARGBHalf)
             {
                 name = "PlanarReflection",
-                hideFlags = HideFlags.DontSave
+                hideFlags = HideFlags.DontSave,
+                antiAliasing = Mathf.Max(1, QualitySettings.antiAliasing) // linhas finas refletidas sem serrilhado
             };
         }
 

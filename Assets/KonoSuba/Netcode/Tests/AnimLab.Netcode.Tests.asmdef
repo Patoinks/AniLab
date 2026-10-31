@@ -1,0 +1,1 @@
+{"name":"AnimLab.Netcode.Tests","rootNamespace":"AnimLab.Netcode.Tests","references":["AnimLab.Netcode.Sim","AnimLab.Netcode.Rollback","AnimLab.Netcode.Transport","AnimLab.Netcode.Unity"],"includePlatforms":["Editor"],"optionalUnityReferences":["TestAssemblies"],"noEngineReferences":false}

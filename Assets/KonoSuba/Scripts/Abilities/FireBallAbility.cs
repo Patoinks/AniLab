@@ -17,6 +17,10 @@ namespace AnimLab.KonoSuba
         [Tooltip("Gravidade própria (m/s²): um arco pequeno, compensado na mira inicial.")]
         public float gravity = 2.4f;
         public float maxRange = 36f;
+        [Header("Golpe")]
+        public float damage = 60f;
+        [Tooltip("Raio da explosão: os corpos dentro levam dano (até 40% na borda).")]
+        public float blastRadius = 2.2f;
         [Tooltip("Volume evaporado no impacto junto à água (m³). Não aplica Burning.")]
         public float evaporatedVolume = 0.12f;
         [Header("Dano")]
@@ -35,7 +39,7 @@ namespace AnimLab.KonoSuba
 
         void Reset()
         {
-            displayName = "Bola de Fogo";
+            displayName = "Fireball";
             element = AbilityElement.Fire;
             slot = 4;
             manaCost = 25f;

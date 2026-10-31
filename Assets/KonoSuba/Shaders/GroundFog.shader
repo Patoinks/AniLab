@@ -13,6 +13,7 @@ Shader "Hidden/KonoSuba/GroundFog"
     #define LAYERS 8
 
     TEXTURE2D(_NoiseTex); SAMPLER(sampler_NoiseTex);
+    TEXTURE2D_X_FLOAT(_FogDepthTex); // profundidade da câmara que está a ser desenhada (AnimLabRenderFeature)
 
     float4 _CornerBL, _CornerBR, _CornerTL, _CornerTR, _CamPos;
     float4 _FogShape;        // altura, densidade, queda com a altura, distância máxima
@@ -88,7 +89,7 @@ Shader "Hidden/KonoSuba/GroundFog"
     float4 Frag(Varyings i) : SV_Target
     {
         float4 src = SAMPLE_TEXTURE2D_X(_BlitTexture, sampler_LinearClamp, i.texcoord);
-        float rawDepth = SampleSceneDepth(i.texcoord);
+        float rawDepth = SAMPLE_TEXTURE2D_X(_FogDepthTex, sampler_PointClamp, i.texcoord).r;
         float eyeDepth = LinearEyeDepth(rawDepth, _ZBufferParams);
 
         float3 dir = lerp(lerp(_CornerBL.xyz, _CornerBR.xyz, i.texcoord.x),
@@ -136,7 +137,11 @@ Shader "Hidden/KonoSuba/GroundFog"
 
         float T = exp(-tau);
         float3 fogCol = sumW > 1e-5 ? sumL / sumW : 0;
-        return float4(lerp(fogCol, src.rgb, T), src.a);
+        // O nevoeiro foi afinado com o projeto em Gamma: a mistura faz-se em espaço gama (como antes do URP),
+        // senão em Linear os meios-tons ficam leitosos e o nevoeiro come a cena.
+        float3 srcG = pow(max(src.rgb, 0.0), 1.0 / 2.2);
+        float3 fogG = pow(max(fogCol, 0.0), 1.0 / 2.2);
+        return float4(pow(lerp(fogG, srcG, T), 2.2), src.a);
     }
     ENDHLSL
 

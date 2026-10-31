@@ -252,7 +252,7 @@ namespace AnimLab.KonoSuba
         void Compress()
         {
             float held = stateTime;
-            compression = held < ability.clickThreshold ? 0f : Mathf.Clamp01((held - ability.clickThreshold) / ability.compressTime);
+            compression = held < ability.clickThreshold ? 0f : Mathf.Clamp01((held - ability.clickThreshold) / (ability.compressTime / ability.CastSpeed));
             transform.position = ability.HoldPoint(caster, ShownRadius) + Random.insideUnitSphere * 0.015f * compression;
             if (!Input.GetMouseButton(0) && !HeldByScript) Fire();
         }

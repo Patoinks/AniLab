@@ -1,0 +1,10 @@
+<linker>
+  <assembly fullname="Assembly-CSharp">
+    <type fullname="AnimLab.KonoSuba.CapsulePlayer" preserve="all"/>
+    <type fullname="AnimLab.KonoSuba.SwordWielder" preserve="all"/>
+    <type fullname="AnimLab.KonoSuba.Combatant" preserve="all"/>
+    <type fullname="AnimLab.KonoSuba.LockOnTarget" preserve="all"/>
+    <type fullname="AnimLab.KonoSuba.HitStop" preserve="all"/>
+  </assembly>
+</linker>
+

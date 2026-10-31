@@ -15,7 +15,7 @@ namespace AnimLab.KonoSuba
 
         void Reset()
         {
-            displayName = "Raio";
+            displayName = "Lightning";
             element = AbilityElement.Lightning;
             slot = 2;
             manaCost = 30f;

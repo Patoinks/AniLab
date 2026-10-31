@@ -38,11 +38,11 @@ Material:
     - _SimNormalScale: 2.5
     - _Smoothness: 0.85
     - _TileSize: 4
-    - _Variation: 0.047
+    - _Variation: 0.04
     - _WaveScale: 0.9
     - _WaveSpeed: 0.4
     m_Colors:
-    - _ColorA: {r: 0.82641506, g: 0.82641506, b: 0.82641506, a: 1}
+    - _ColorA: {r: 0.26999995, g: 0.27999997, b: 0.29999998, a: 1}
     - _ColorB: {r: 0.10999996, g: 0.11499997, b: 0.12999997, a: 1}
     - _CrestColor: {r: 0.14999998, g: 0.16999996, b: 0.20999995, a: 1}
     - _GlowColor: {r: 0.21999997, g: 0.22999996, b: 0.25999996, a: 1}

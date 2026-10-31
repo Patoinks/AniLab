@@ -41,7 +41,7 @@ namespace AnimLab.KonoSuba
             if (ability == null || (!launched && caster == null)) { Destroy(gameObject); return; }
             float previous = age;
             age += Time.deltaTime;
-            float formation = Mathf.Max(0.05f, ability.formationTime);
+            float formation = Mathf.Max(0.05f, ability.formationTime / ability.CastSpeed);
             if (!launched)
             {
                 transform.position = ability.HoldPoint(caster);
@@ -112,12 +112,19 @@ namespace AnimLab.KonoSuba
             if (finished) return;
             finished = true;
             FireBallEffect.Impact(transform.position, body, caster, ability);
+            Vector3 push = velocity; push.y = 0f;
+            Combat.Explode(transform.position, ability.blastRadius, new HitInfo
+            {
+                damage = ability.damage * ability.SpellPower, element = AbilityElement.Fire,
+                status = StatusType.Burning, statusDuration = 4f, stagger = 40f,
+                knockback = push.normalized * 6f + Vector3.up * 2.5f, source = caster
+            }, Combat.Of(body));
             Destroy(gameObject);
         }
 
         void Draw(float dt)
         {
-            float f = Mathf.SmoothStep(0f, 1f, age / Mathf.Max(0.05f, ability.formationTime));
+            float f = Mathf.SmoothStep(0f, 1f, age / Mathf.Max(0.05f, ability.formationTime / ability.CastSpeed));
             if (Flying && velocity.sqrMagnitude > 0.01f) transform.rotation = Quaternion.LookRotation(velocity);
             if (visual != null) visual.Tick(dt, transform.position, Flying ? velocity : Vector3.zero, f);
         }

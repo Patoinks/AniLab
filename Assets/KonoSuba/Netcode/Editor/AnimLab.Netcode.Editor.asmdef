@@ -1,0 +1,1 @@
+{"name":"AnimLab.Netcode.Editor","rootNamespace":"AnimLab.Netcode.Editor","references":["AnimLab.Netcode.Unity"],"includePlatforms":["Editor"],"noEngineReferences":false}

@@ -40,7 +40,14 @@ namespace AnimLab.KonoSuba
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
             CameraType type = renderingData.cameraData.cameraType;
-            if (type == CameraType.Preview || type == CameraType.Reflection) return;
+            if (type == CameraType.Preview) return;
+            if (type == CameraType.Reflection)
+            {
+                // No reflexo da água o fogo também precisa do seu caminho próprio (senão reflete-se laranja e baço).
+                renderer.EnqueuePass(fireDraw);
+                renderer.EnqueuePass(fireComposite);
+                return;
+            }
             renderer.EnqueuePass(fog);
             renderer.EnqueuePass(fireDraw);
             renderer.EnqueuePass(distortion);
@@ -77,7 +84,9 @@ namespace AnimLab.KonoSuba
 
         public GroundFogPass() { requiresIntermediateTexture = true; }
 
-        class PassData { public TextureHandle source; public Material material; }
+        class PassData { public TextureHandle source, depth; public Material material; }
+
+        static readonly int FogDepthId = Shader.PropertyToID("_FogDepthTex");
 
         public void Dispose() => CoreUtils.Destroy(material);
 
@@ -108,11 +117,18 @@ namespace AnimLab.KonoSuba
             {
                 data.source = copy;
                 data.material = material;
+                // A profundidade desta câmara vai explícita para o material: a global _CameraDepthTexture
+                // podia ainda ser a da câmara do reflexo (renderizada antes, no mesmo frame), e o nevoeiro
+                // atravessava os objetos e ficava com formas espelhadas.
+                data.depth = resources.cameraDepthTexture.IsValid() ? resources.cameraDepthTexture : resources.activeDepthTexture;
                 builder.UseTexture(copy);
-                if (resources.cameraDepthTexture.IsValid()) builder.UseTexture(resources.cameraDepthTexture);
+                builder.UseTexture(data.depth);
                 builder.SetRenderAttachment(color, 0);
                 builder.SetRenderFunc((PassData d, RasterGraphContext ctx) =>
-                    Blitter.BlitTexture(ctx.cmd, d.source, new Vector4(1, 1, 0, 0), d.material, 0));
+                {
+                    d.material.SetTexture(FogDepthId, d.depth);
+                    Blitter.BlitTexture(ctx.cmd, d.source, new Vector4(1, 1, 0, 0), d.material, 0);
+                });
             }
         }
 
