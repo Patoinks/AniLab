@@ -71,9 +71,9 @@ namespace AnimLab.KonoSuba
             // Fogo, água e eletricidade têm números próprios no mundo (letras em degradê com o elemento atrás).
             if (ElementDamageNumber.Spawn(c.NameplatePoint - Vector3.up * 0.3f, Mathf.RoundToInt(hit.damage),
                     hit.critical, hit.element)) return;
-            // Crítico: maior, dourado e com "!".
+            // Crítico: maior e dourado.
             bool big = hit.damage >= 40f || hit.critical;
-            string text = Mathf.RoundToInt(hit.damage) + (hit.critical ? "!" : "");
+            string text = Mathf.RoundToInt(hit.damage).ToString();
             var l = hud.MakeLabel(text, hit.critical ? 34 : big ? 30 : 22);
             l.style.position = Position.Absolute;
             l.style.color = hit.critical ? new Color(1f, 0.82f, 0.35f)
