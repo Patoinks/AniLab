@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.rlabrecque.steamworks.net": "https://github.com/rlabrecque/Steamworks.NET.git?path=/com.rlabrecque.steamworks.net#2025.165.0",
     "com.unity.multiplayer.center": "1.0.1",
     "com.unity.postprocessing": "3.4.0",
     "com.unity.render-pipelines.universal": "17.3.0",

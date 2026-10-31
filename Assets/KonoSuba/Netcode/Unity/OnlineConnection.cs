@@ -3,6 +3,7 @@ using System.Diagnostics;
 using AnimLab.Netcode.Sim;
 using AnimLab.Netcode.Rollback;
 using AnimLab.Netcode.Transport;
+using AnimLab.Netcode.Steam;
 using UnityEngine;
 
 namespace AnimLab.Netcode.Unity
@@ -15,7 +16,10 @@ namespace AnimLab.Netcode.Unity
     public sealed class OnlineConnection : MonoBehaviour
     {
         static OnlineConnection pending;
-        UdpTransport transport;
+        ISessionTransport transport;
+        string connectionName="Direct UDP";
+        Action<NetMatch> connected;
+        Action cancelled;
         OnlineOptions options;
         bool transferred,automatic,background;
         int limit;
@@ -23,6 +27,7 @@ namespace AnimLab.Netcode.Unity
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void Register()
         {
+            pending=null;
             OnlineMenu.HostRequested=o=>Begin(o,true);
             OnlineMenu.JoinRequested=o=>Begin(o,false);
         }
@@ -46,23 +51,53 @@ namespace AnimLab.Netcode.Unity
         }
         public static OnlineConnection Begin(OnlineOptions options,bool host)
         {
-            Cancel(); NetMatch.Active?.Stop();
+            Cancel(); NetMatch.Active?.Stop(); SteamOnline.Leave();
+            PlayerConfig config=Config(options);
+            UdpTransport socket=host?new UdpTransport(options.Port,HostAccept(config,options)):
+                new UdpTransport(options.Endpoint,MatchHandshake.Offer(config,options.Delay));
+            var connection=Attach(socket,options,"Direct UDP");
+            OnlineMenu.Current?.ShowMessage(host?"Hosting UDP port "+socket.LocalPort+" · waiting for peer":"Connecting to "+options.Endpoint,true);
+            return connection;
+        }
+        // O host decide a partida: semente, IA da cena e equipas. O estado inicial vai inteiro para o outro jogador.
+        static Func<byte[],byte[]> HostAccept(PlayerConfig config,OnlineOptions options)
+        {
+            ulong seed=(ulong)DateTime.UtcNow.Ticks;
+            PlayerState[] extra=options.WithAI?NetMatch.SceneFighters(seed):null;
+            byte team=(byte)(options.CoOp?1:0);
+            AbilityTable table=NetMatch.CaptureTable(GameObject.Find("Player"));
+            return p=>MatchHandshake.Accept(p,config,options.Delay,seed,extra,team,table);
+        }
+        static PlayerConfig Config(OnlineOptions options)
+        {
             var player=GameObject.Find("Player"); if(player==null) throw new InvalidOperationException("Player missing");
             PlayerConfig config=NetMatch.CaptureConfig(player); config.Style=options.FirstStyle;
             if(Arg("-netEndurance","0")=="1") config.MaxHealth=100000;
-            UdpTransport socket=host?new UdpTransport(options.Port,p=>MatchHandshake.Accept(p,config,options.Delay,(ulong)DateTime.UtcNow.Ticks)):
-                new UdpTransport(options.Endpoint,MatchHandshake.Offer(config,options.Delay));
+            return config;
+        }
+        public static void BeginSteam(OnlineOptions options,SteamClient client,bool host,ulong owner)
+        {
+            PlayerConfig config=Config(options);
+            SteamTransport socket=host?SteamTransport.Host(client.IsLobbyPeer,HostAccept(config,options)):
+                SteamTransport.Join(owner,MatchHandshake.Offer(config,options.Delay));
+            var connection=Attach(socket,options,"Steam relay");
+            connection.cancelled=client.Leave;
+            connection.connected=match=> { match.Ended=client.Leave; client.SetState("Playing"); };
+            OnlineMenu.Current?.ShowMessage(client.Status,true);
+        }
+        static OnlineConnection Attach(ISessionTransport socket,OnlineOptions options,string name)
+        {
             var connection=new GameObject("OnlineConnection").AddComponent<OnlineConnection>();
             pending=connection; connection.transport=socket; connection.options=options;
+            connection.connectionName=name;
             connection.background=Application.runInBackground; Application.runInBackground=true;
-            OnlineMenu.Current?.ShowMessage(host?"Hosting UDP port "+socket.LocalPort+" · waiting for peer":"Connecting to "+options.Endpoint,true);
             return connection;
         }
         public static void Cancel()
         {
             if(pending==null) return;
             var p=pending; pending=null; p.enabled=false;
-            if(!p.transferred) { p.transport?.Dispose(); Application.runInBackground=p.background; }
+            if(!p.transferred) { p.transport?.Dispose(); p.cancelled?.Invoke(); p.cancelled=null; Application.runInBackground=p.background; }
             Destroy(p.gameObject);
         }
         void Update()
@@ -73,10 +108,12 @@ namespace AnimLab.Netcode.Unity
                 try {
                     MatchState state=MatchHandshake.Decode(transport.MatchPayload,out int delay);
                     var match=new GameObject("NetMatch").AddComponent<NetMatch>();
-                    match.MovementDemo=false; match.UseRollback=true; match.InitialState=state;
+                    match.MovementDemo=false; match.UseRollback=true; match.InitialState=state; match.HasInitialState=true;
                     match.LocalPlayer=transport.IsHost?0:1; match.InputDelay=delay; match.RestoreBackground=background;
+                    match.ConnectionName=connectionName;
                     match.Controls=options.Controls; match.Interpolate=options.Interpolate;
                     match.DirectPeer=new RollbackPeer(new RollbackSession(state,match.LocalPlayer,delay),transport,transport.SessionId);
+                    connected?.Invoke(match);
                     if(automatic) { match.TickLimit=limit; match.ReportPath=report; var run=match.gameObject.AddComponent<NetBuildRun>(); run.Match=match; run.PngPath=png; }
                     transferred=true; pending=null; OnlineMenu.Current?.SetOpen(false); Destroy(gameObject);
                 } catch(Exception e) { Fail(e.Message); }
@@ -91,7 +128,7 @@ namespace AnimLab.Netcode.Unity
         }
         void OnDestroy()
         {
-            if(!transferred) { transport?.Dispose(); Application.runInBackground=background; }
+            if(!transferred) { transport?.Dispose(); cancelled?.Invoke(); cancelled=null; Application.runInBackground=background; }
             if(pending==this) pending=null;
         }
     }

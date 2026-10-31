@@ -24,7 +24,8 @@ namespace AnimLab.Netcode.Rollback
         readonly PlayerInput neutralRemote;
         int dirty=int.MaxValue,nextCheckpoint=30,attempts;
         public MatchState State;
-        public MatchState Previous { get; private set; }
+        // Campo (não propriedade): o Mono não passa o estado (~12 KB) por valor a um setter.
+        public MatchState Previous;
         public int LocalPlayer { get; }
         public int InputDelay { get; }
         public int LocalLatest { get; private set; }=-1;
@@ -44,7 +45,7 @@ namespace AnimLab.Netcode.Rollback
         public event Action<SimEvent> EventGenerated;
         public event Action<int,int> Rewound;
 
-        public RollbackSession(MatchState initial,int localPlayer,int inputDelay=2)
+        public RollbackSession(in MatchState initial,int localPlayer,int inputDelay=2)
         {
             if(localPlayer<0 || localPlayer>1 || inputDelay<0 || inputDelay>8 || initial.Tick!=0) throw new ArgumentOutOfRangeException();
             LocalPlayer=localPlayer; InputDelay=inputDelay; State=Previous=initial;

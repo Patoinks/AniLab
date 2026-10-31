@@ -65,9 +65,24 @@ namespace AnimLab.KonoSuba
             c.MaxPoise = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxPoise); c.KnockbackScale = AnimLab.Netcode.Unity.ViewConvert.Fixed(knockbackScale);
             var sheet = GetComponent<CharacterStats>();
             c.HealthRegen = sheet != null ? AnimLab.Netcode.Unity.ViewConvert.Fixed(sheet.HealthRegen) : AnimLab.Netcode.Sim.Fix.Zero;
+            c.MagicDefense = AnimLab.Netcode.Unity.ViewConvert.Fixed(magicDefense);
+            float R(AbilityElement e) => elementResist.TryGetValue(e, out float r) ? r : 0f;
+            float S(StatusType t) => statusResist.TryGetValue(t, out float r) ? r : 0f;
+            c.ResistWater = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Water)); c.ResistLightning = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Lightning));
+            c.ResistFire = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Fire)); c.ResistAir = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Air));
+            c.ResistEarth = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Earth)); c.ResistIce = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Ice));
+            c.ResistDark = AnimLab.Netcode.Unity.ViewConvert.Fixed(R(AbilityElement.Dark));
+            c.ResistWet = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Wet)); c.ResistStatic = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Static));
+            c.ResistGrounded = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Grounded)); c.ResistFrozen = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Frozen));
+            c.ResistAsphyxia = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Asphyxia)); c.ResistBurning = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Burning));
+            c.ResistBlind = AnimLab.Netcode.Unity.ViewConvert.Fixed(S(StatusType.Blind));
+            var aimTarget = GetComponent<LockOnTarget>();
+            if (aimTarget != null) c.AimHeight = AnimLab.Netcode.Unity.ViewConvert.Fixed(aimTarget.aimHeight);
+            c.Refill = refill; c.RefillDelay = AnimLab.Netcode.Unity.ViewConvert.Fixed(refillDelay);
+            c.RefillRate = AnimLab.Netcode.Unity.ViewConvert.Fixed(refillRate);
         }
 
-        public void ApplyNetState(AnimLab.Netcode.Sim.PlayerState state)
+        public void ApplyNetState(in AnimLab.Netcode.Sim.PlayerState state)
         {
             health = AnimLab.Netcode.Unity.ViewConvert.Number(state.Health);
             maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(state.Config.MaxHealth);
@@ -77,9 +92,21 @@ namespace AnimLab.KonoSuba
             externalInvulnerable = state.Invulnerable;
             airborne = state.KnockAirborne;
             superArmor = state.SuperArmor;
+            // Estados vindos da simulação (ícones e anéis da placa).
+            for (int t = 1; t <= 7; t++)
+            {
+                var type = (StatusType)t;
+                float left = AnimLab.Netcode.Unity.ViewConvert.Number(state.StatusLeft((AnimLab.Netcode.Sim.Status)t));
+                ActiveStatus found = null;
+                foreach (ActiveStatus a in statuses) if (a.type == type) { found = a; break; }
+                if (left <= 0f) { if (found != null) statuses.Remove(found); continue; }
+                if (found == null) statuses.Add(found = new ActiveStatus { type = type });
+                found.remaining = left;
+                found.duration = AnimLab.Netcode.Unity.ViewConvert.Number(state.StatusDuration((AnimLab.Netcode.Sim.Status)t));
+            }
         }
 
-        public void PresentNetEvent(AnimLab.Netcode.Sim.SimEvent ev)
+        public void PresentNetEvent(AnimLab.Netcode.Sim.SimEvent ev, Component source)
         {
             Vector3 point = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Point);
             Vector3 direction = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Direction);
@@ -91,25 +118,41 @@ namespace AnimLab.KonoSuba
                 flinchVel += 300f;
             }
             var kind = ev.Kind;
-            // Só a apresentação usa o relógio do Unity; a sessão avança por unscaledDeltaTime.
-            if (ev.VisualStop > AnimLab.Netcode.Sim.Fix.Zero) HitStop.Do(AnimLab.Netcode.Unity.ViewConvert.Number(ev.VisualStop));
-            if (kind == AnimLab.Netcode.Sim.EventKind.Parry) HitStop.Then(0.45f, 0.3f);
-            if (kind == AnimLab.Netcode.Sim.EventKind.Clash) HitStop.Then(0.25f, 0.45f);
-            if (kind == AnimLab.Netcode.Sim.EventKind.Jump || kind == AnimLab.Netcode.Sim.EventKind.Roll ||
-                kind == AnimLab.Netcode.Sim.EventKind.Land)
+            // Mesmo feedback do offline (SwordWielder.Show*). Só a apresentação usa o relógio do Unity.
+            var attacker = source != null ? source.GetComponent<SwordWielder>() : null;
+            var defender = GetComponent<SwordWielder>();
+            Color spark = attacker != null ? attacker.sparkColor : new Color(1f, 0.75f, 0.45f);
+            switch (kind)
             {
-                if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(point, 0.6f);
-                return;
+                case AnimLab.Netcode.Sim.EventKind.Jump:
+                case AnimLab.Netcode.Sim.EventKind.Roll:
+                case AnimLab.Netcode.Sim.EventKind.Land:
+                    if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(point, 0.6f);
+                    return;
+                case AnimLab.Netcode.Sim.EventKind.Stagger: AnyStagger?.Invoke(this); return;
+                case AnimLab.Netcode.Sim.EventKind.StatusApplied:
+                    AnyStatusApplied?.Invoke(this, (StatusType)ev.Status); return;
+                case AnimLab.Netcode.Sim.EventKind.Defeated:
+                    Combat.Callout(transform.position + Vector3.up * 2.4f, "DEFEATED", new Color(1f, 0.45f, 0.32f), 30f); return;
+                case AnimLab.Netcode.Sim.EventKind.Hit:
+                    if (ev.VisualStop > AnimLab.Netcode.Sim.Fix.Zero && ev.Spray.LengthSquared > AnimLab.Netcode.Sim.Fix.Zero)
+                        SwordWielder.ShowHit(point, AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Spray), ev.Heavy, spark,
+                            AnimLab.Netcode.Unity.ViewConvert.Number(ev.VisualStop));
+                    else if (ev.VisualStop > AnimLab.Netcode.Sim.Fix.Zero) HitStop.Do(AnimLab.Netcode.Unity.ViewConvert.Number(ev.VisualStop));
+                    break;
+                // Num parry, o "atacante" do evento é quem foi aparado (source) e o alvo é quem aparou.
+                case AnimLab.Netcode.Sim.EventKind.Parry:
+                    SwordWielder.ShowParry(point, direction); defender?.Shake(); break;
+                case AnimLab.Netcode.Sim.EventKind.Block:
+                    SwordWielder.ShowBlock(point, direction, defender != null ? defender.sparkColor : spark, false); defender?.Shake(); break;
+                case AnimLab.Netcode.Sim.EventKind.GuardBreak:
+                    // Bloqueio que partiu a postura (com dano) ou Guard Breaker do montante.
+                    if (ev.Heavy) SwordWielder.ShowGuardBreak(point, direction);
+                    else { SwordWielder.ShowBlock(point, direction, defender != null ? defender.sparkColor : spark, true); defender?.Shake(); }
+                    break;
+                case AnimLab.Netcode.Sim.EventKind.Clash:
+                    SwordWielder.ShowClash(point, direction, spark); attacker?.Shake(); defender?.Shake(); break;
             }
-            if (kind == AnimLab.Netcode.Sim.EventKind.Stagger) { AnyStagger?.Invoke(this); return; }
-            Color color = kind == AnimLab.Netcode.Sim.EventKind.Parry ? new Color(1f, 0.84f, 0.42f) :
-                kind == AnimLab.Netcode.Sim.EventKind.Clash ? new Color(0.78f, 0.88f, 1f) : new Color(1f, 0.75f, 0.45f);
-            SwordSparks.Burst(point, direction + Vector3.up * 0.4f, 22, color, speed: 9f, spread: 0.7f, flash: 0.3f);
-            string text = kind == AnimLab.Netcode.Sim.EventKind.Parry ? "PARRY" :
-                kind == AnimLab.Netcode.Sim.EventKind.Block ? "BLOCK" :
-                kind == AnimLab.Netcode.Sim.EventKind.Clash ? "CLASH" :
-                kind == AnimLab.Netcode.Sim.EventKind.GuardBreak ? "GUARD BREAK" : "";
-            if (text.Length > 0) Combat.Callout(point + Vector3.up * 0.5f, text, color, 28f);
             if (kind == AnimLab.Netcode.Sim.EventKind.Plunge)
             {
                 if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(point, 2.5f);

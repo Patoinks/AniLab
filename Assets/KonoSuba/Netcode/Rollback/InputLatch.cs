@@ -7,7 +7,7 @@ namespace AnimLab.Netcode.Rollback
     {
         const Buttons Edges=Buttons.Attack|Buttons.Jump|Buttons.Roll;
         public PlayerInput Pending { get; private set; }
-        public void Sample(PlayerInput input) { input.Buttons|=Pending.Buttons&Edges; Pending=input; }
-        public void Consume() { var p=Pending; p.Buttons&=~Edges; Pending=p; }
+        public void Sample(PlayerInput input) { input.Buttons|=Pending.Buttons&Edges; if(input.Cast==0) input.Cast=Pending.Cast; Pending=input; }
+        public void Consume() { var p=Pending; p.Buttons&=~Edges; p.Cast=0; Pending=p; }
     }
 }

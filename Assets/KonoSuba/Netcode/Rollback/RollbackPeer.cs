@@ -161,13 +161,15 @@ namespace AnimLab.Netcode.Rollback
         void ReplyState(int tick)
         {
             if(tick<=0 || tick%30!=0 || !Session.TryCheckpoint(tick,out Checkpoint c)) return;
-            Begin(3); writer.Write(tick); writer.Write((ushort)c.State.Length); writer.Write(c.State); Send();
+            byte[] packed=Packing.Deflate(c.State);
+            if(packed.Length>MaximumPacket-20) return; // estado grande demais para um datagrama: o dump fica só com o local
+            Begin(3); writer.Write(tick); writer.Write((ushort)packed.Length); writer.Write(packed); Send();
         }
         void ReadState(BinaryReader r)
         {
             int tick=r.ReadInt32(),length=r.ReadUInt16();
             if(length>MaximumPacket-20 || length!=r.BaseStream.Length-r.BaseStream.Position) throw new InvalidDataException("State size");
-            byte[] bytes=r.ReadBytes(length);
+            byte[] bytes=Packing.Inflate(r.ReadBytes(length));
             if(Desync==null || Desync.Tick!=tick) return;
             MatchState state=StateCodec.Decode(bytes);
             if(state.Tick!=tick || StateCodec.Checksum(state)!=Desync.RemoteHash) throw new InvalidDataException("State checksum");

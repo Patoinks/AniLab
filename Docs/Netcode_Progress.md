@@ -2,9 +2,9 @@
 
 Projeto confirmado: `C:\Users\Martim\AnimLab`, Unity 6000.3.15f1. Implementação por fases do §7 de `Netcode_Rollback.md`. Sem commits; alterações anteriores preservadas.
 
-**Estado final:** fases 1–4 validadas. Fase 5 implementada e validada com sockets reais e dois processos Windows nesta máquina; falta a validação em dois PCs da LAN. Fase 6 não iniciada, respeitando a ordem exigida.
+**Estado atual:** fases 1–4 validadas. Fase 5 validada com sockets reais e dois processos Windows nesta máquina; falta o teste em dois PCs da LAN. Fase 6 implementada no âmbito simplificado pedido (Host + lista + Join por Steam); validações locais descritas abaixo. A ligação real entre duas contas em dois PCs continua por verificar.
 
-**Validação atual:** 39/39 testes verdes em `Logs/netcode_final_tests.xml`; codec versão 3; checksum Mono/CoreCLR `31001B6ADE1176F8`. Dois executáveis chegaram aos 10 800 ticks, com 360 verificações por lado, o mesmo checksum `86234819F43C69B2` e zero desync. Build: `Builds/Netcode/AnimLab.exe`.
+**Validação atual:** **54/54 testes EditMode verdes, zero ignorados**, em `Logs/netcode_steam_tests_final.xml`; codec versão 3; checksum CoreCLR preservado `31001B6ADE1176F8`. Steam Networking Sockets nativo em loopback: 10 800 ticks, 360 checksums por lado, hash `3A984D838203671F`, zero desync. Build: `Builds/Netcode/AnimLab.exe`. Os resultados das fases anteriores são históricos e estão discriminados abaixo.
 
 ## Fase 1 — validada
 
@@ -103,10 +103,62 @@ Teste automático em dois terminais, a partir da raiz do projeto:
 
 Os argumentos `-netHost/-netJoin` ativam o banco de teste com saída automática após os ticks pedidos e confirmação dos checksums. `-netEndurance 1` aumenta a vida apenas nesse teste. O menu normal mantém os stats reais e a sessão aberta até Leave. Não usar `-nographics` para a captura PNG.
 
-## Fase 6 — não iniciada
+## Fase 6 — Steam, lista de lobbies e relay
 
-- Steam P2P/lobby/convites/relay ainda não implementados nem apresentados como funcionais.
-- O §7 exige validar a fase anterior antes de avançar; o teste em dois PCs da LAN continua pendente.
+### Como jogar, em casas diferentes
+
+1. Cada jogador abre a Steam **na sua própria conta**, com sessão online, e abre a mesma versão do projeto no Unity 6000.3.15f1. Aguardar a importação dos pacotes no primeiro arranque.
+2. Ambos carregam **Play → F8 / Online** e escolhem **Your style**.
+3. Um carrega **Host** na secção **Steam Lobbies**. O seu nome Steam, estilo e estado aparecem na lista.
+4. O outro espera pela atualização da lista (cada 4 segundos) ou carrega **Refresh**, e carrega **Join** no lobby do amigo. O combate começa depois do handshake.
+5. **Leave** termina a sessão e regressa ao modo de um jogador. Sair do Play ou fechar o jogo também sai do lobby. Se o amigo sair, a sessão termina nos dois lados. **F11** mostra as estatísticas.
+
+Não é preciso escrever IPs, escolher portas nem configurar o router. O host espera sem limite enquanto está sozinho. Se F8 estiver associado a outra ação, usar o botão **Online** do HUD.
+
+O mesmo fluxo está no executável `Builds/Netcode/AnimLab.exe`. Copiar a pasta **Builds/Netcode inteira** para o outro PC; manter o `steam_appid.txt` e as DLLs fornecidas. Ambos usam a mesma versão. Não abrir Editor e executável em simultâneo na mesma conta para tentar simular dois jogadores.
+
+Se a Steam não estiver aberta, o menu mostra **Steam is not running**. **Direct IP (UDP)** e **Local test & advanced settings** continuam disponíveis. O jogo de um jogador não inicializa a Steam; a inicialização é feita ao abrir Online.
+
+### Implementação
+
+- Escolhido **Steamworks.NET 2025.165.0**: expõe diretamente as APIs de lobby e Networking Sockets da Valve, inclui plugins nativos para Unity e pode ser instalado por UPM sem copiar um SDK manualmente. Dependência fixa em `Packages/manifest.json`; `packages-lock.json` fixa o commit `ea51b029a5dbcb47a99d3c1fac930b811672ed32`. O outro PC recebe a configuração pelo git. [Versão oficial](https://github.com/rlabrecque/Steamworks.NET/releases/tag/2025.165.0).
+- App de teste **480 / Spacewar**, com `steam_appid.txt` na raiz para o Editor. `NetcodeBuild` copia-o para junto do executável e verifica os ficheiros Steam do build: `steam_api64.dll` e `com.rlabrecque.steamworks.net.dll` ao lado do `.exe`; o wrapper também fica no diretório Managed normal do Unity. O instalador oficial do pacote acrescenta automaticamente `STEAMWORKS_NET` aos símbolos Standalone em `ProjectSettings/ProjectSettings.asset`.
+- Lobby público com exatamente **2 lugares**. Filtros no pedido à Steam e nova validação dos resultados e do Join: chave exclusiva `AnimLab.7c92810e6a1b4b949532e6e01e597dac`, protocolo `wire1.rules1.state3`, build `rollback-steam-6.1`, Steam ID do dono, nome do host, estilo válido e estado. A pesquisa usa distância mundial. Lobbies de outros jogos que usam 480 e versões incompatíveis não entram na lista.
+- A lista mostra nome, estilo, estado e ocupação; atualiza a cada 4 segundos enquanto Online está aberto, com um único pedido pendente. O nosso lobby mantém uma linha identificada como **Your lobby**. A Steam omite dos resultados públicos os lobbies cheios ou fechados a entradas. [API de lobbies](https://partner.steamgames.com/doc/api/ISteamMatchmaking).
+- `SteamTransport : ITransport` usa **Steam Networking Sockets / SDR**, com ICE desativado por opção da ligação (sem alterar preferências da conta). Os datagramas usam `UnreliableNoDelay` (sem Nagle, retransmissão ou espera por inputs). Só se aceita uma ligação de outro membro do lobby. [API de sockets](https://partner.steamgames.com/doc/api/ISteamNetworkingSockets).
+- O handshake anterior foi extraído para `DatagramSession`, partilhado por UDP e Steam: Hello/Welcome/Ready/Start, tokens, parâmetros canónicos, keep-alive, timeout e saída. `MatchHandshake`, `RollbackPeer`, protocolo de inputs, checksums e simulação são reutilizados. O tempo de espera sem adversário é ilimitado apenas no host Steam.
+- `SteamOnline` trata callbacks no thread principal e fecha sessão/lobby/API no Leave, saída do peer, fecho, Stop e recompilação do Editor. Há reinicialização por Play com domain reload desligado. Criações/entradas canceladas deixam também o lobby quando chega a resposta assíncrona. Não há migração automática de host.
+- A versão de compatibilidade está em `SteamLobbyInfo.Build`: incrementá-la ao alterar simulação ou protocolo. Os dois jogadores devem receber os mesmos ficheiros. Convites Steam não fazem parte desta fase simplificada; a entrada faz-se pela lista.
+- Só foram alterados ficheiros de netcode, a configuração dos pacotes, o símbolo Standalone acrescentado pelo pacote, este relatório e o novo `steam_appid.txt`. Cena, scripts do combate offline, sistema, firewall e conta Steam preservados. Sem commits.
+
+### Validação local
+
+- **54/54 EditMode verdes, zero falhas e zero ignorados**, com o Unity fechado antes do runner. `Logs/netcode_steam_tests_final.xml` e `Logs/netcode_steam_tests_final.log`. Inclui toda a regressão das fases 1–5 (determinismo, oracle, lag/perda, paridade dos estilos, UDP real e restauro offline) e 15 casos Steam.
+- Teste nativo com `ISteamNetworkingSockets.CreateSocketPair`, **network loopback real**, sem segunda conta: usa `SteamTransport`, o handshake partilhado e `RollbackPeer`; 10 800 ticks, **360/360 checksums**, hash **`3A984D838203671F`**, zero desync e zero datagramas rejeitados. Flags de envio **5 / UnreliableNoDelay**. `Logs/netcode/steam_editmode.txt`.
+- Editor, **dois Plays com domain reload desligado**: inicialização real, cancelamento de criação pendente, criação de lobby público, presença na resposta real da pesquisa, metadados, Leave, novo lobby deixado aberto ao Stop, shutdown e novo Play sem estado residual. `Logs/netcode/steam_editor_lifecycle.txt`. A regressão existente também entra em Play com a configuração normal.
+- Repetido o verificador CoreCLR sem Unity: 10 800 ticks, hash preservado **`31001B6ADE1176F8`**, 360/360 checksums e zero desync. O núcleo da simulação não foi alterado nesta fase.
+- Build Windows Development reconstruído por **NetcodeBuild**, resultado **Succeeded**, 169 359 982 bytes de conteúdo. `Logs/netcode_steam_build_final.log`. `steam_appid.txt` contém 480; DLL nativa ao lado do `.exe` idêntica por SHA-256 à do pacote; wrapper ao lado do `.exe` idêntico ao do diretório Managed do player.
+- **Executável com a Steam real aberta:** inicialização App 480, socket pair nativo com os mesmos 10 800 ticks/360 checksums por lado/zero desync, criação do lobby público **Martin · Reaper · Waiting · 1/2**, presença no resultado bruto da pesquisa da Steam com todos os metadados, Leave, shutdown e nova inicialização, tudo concluído. A disponibilidade SDR reportou `k_ESteamNetworkingAvailability_Current`; isso não valida uma rota entre duas casas. `Logs/netcode/steam_smoke.txt` e `Logs/netcode_steam_smoke.log`, `success=True`.
+- **Steam indisponível simulada**, sem fechar a Steam nem alterar a conta: mensagem exata **Steam is not running**, Local Test com 180 ticks e 5 checksums, sem desync, e retorno à posição offline original. `Logs/netcode/steam_unavailable.txt` e `Logs/netcode_steam_unavailable.log`, `success=True`. O caminho real com o cliente Steam encerrado não foi exercitado neste PC.
+- **Capturas finais inspecionadas, 1280×720:** `Logs/cap/netcode_steam_lobbies.png` (lista com o lobby real e metadados visíveis) e `Logs/cap/netcode_steam_unavailable.png` (mensagem sem Steam). Corrigido o contraste das opções expansíveis de UDP/Local Test; a janela tem scroll para os formulários abertos. A captura usa render do próprio jogo; os testes chamam os métodos normais do menu, sem injeção de teclado/rato.
+- **50 ficheiros de netcode com `.meta` verificados:** nenhum em falta, nenhum GUID inválido ou duplicado; `git diff --check` verde. Sem erros nem exceções de Steam/código nos logs runtime; permanece o aviso de síntese da fonte Cambria já documentado na fase 5.
+
+Repetir, com o Editor fechado:
+
+```powershell
+& "C:/Program Files/Unity/Hub/Editor/6000.3.15f1/Editor/Unity.exe" -batchmode -projectPath C:/Users/Martim/AnimLab -runTests -testPlatform EditMode -testResults Logs/netcode_steam_tests_final.xml -logFile Logs/netcode_steam_tests_final.log
+& "C:/Program Files/Unity/Hub/Editor/6000.3.15f1/Editor/Unity.exe" -batchmode -quit -projectPath C:/Users/Martim/AnimLab -executeMethod AnimLab.Netcode.Editor.NetcodeBuild.Run -logFile Logs/netcode_steam_build_final.log
+```
+
+Teste automático no executável, com uma conta Steam aberta (cria e deixa um lobby de teste):
+
+```powershell
+& .\Builds\Netcode\AnimLab.exe -batchmode -screen-width 1280 -screen-height 720 -netSteamSmoke 1 -netSteamPng Logs/cap/netcode_steam_lobbies.png -netSteamReport Logs/netcode/steam_smoke.txt -logFile Logs/netcode_steam_smoke.log
+```
+
+Para simular indisponibilidade da Steam sem fechar o cliente nem alterar a conta, acrescentar `-netSteamDisabled 1` e usar outros caminhos de relatório/captura. Esse teste verifica a mensagem, o Local Test e o restauro offline; a Steam real não é encerrada. Os argumentos de teste não são necessários no uso normal.
+
+**Por verificar:** ligação real entre **duas contas Steam em dois PCs, em casas diferentes**, incluindo a rota SDR efetiva, input humano dos dois lados e saída remota real. Um socket pair local não prova conectividade pela internet. O teste em dois PCs da LAN da fase 5 também continua pendente.
 
 ## Ficheiros e âmbito
 
@@ -115,6 +167,7 @@ Criados em `Assets/KonoSuba/Netcode/`, com os respetivos .meta:
 - `Sim/`: asmdef sem Unity, Fix, FixTables, FixVec3, State, StateCodec, World, SwordData, CombatRules e BotInputs.
 - `Rollback/`: asmdef sem Unity, RollbackSession, RollbackPeer, MatchHandshake, LoopbackMatch, InputLatch e EventLedger.
 - `Transport/`: asmdef sem Unity, ITransport, Loopback e UdpTransport.
+- Fase 6: `Transport/DatagramSession`, `Steam/` (cliente/lobbies, catálogo e compatibilidade, transporte e verificador nativo), `Unity/SteamOnline`, `Unity/SteamSmokeRun`, `Editor/SteamEditorLifetime` e `Tests/SteamTests`, todos com `.meta`.
 - `Unity/`: asmdef, Views/interfaces, InputSampling, NetMatch/NetcodeCapture, OnlineMenu, OnlineConnection/NetworkClock, NetBuildRun, ShaderReferences e link.xml.
 - `Editor/`: asmdef e NetcodeBuild.
 - `Tests/`: asmdef e MovementTests, CombatTests, RollbackTests, EventTests, PresentationTests e UdpTests.
@@ -134,3 +187,18 @@ O diff dos restantes ficheiros sujos mantém as contagens iniciais, incluindo Sw
 Gravações por fase: `Logs/cap/netcode_phase1.mp4`, `netcode_phase2.mp4`, `netcode_phase3.mp4`, `netcode_phase4.mp4`; prova longa da fase 3 em `netcode_phase3_180s/f_0001.png`; prova do UDP em `netcode_phase5_180s.png`. Os artefactos antigos representam a versão da fase em que foram capturados. O menu atual também está em `Logs/cap/netcode_online_menu/f_0001.png`.
 
 Limitações de âmbito mantidas: apenas dois jogadores, arena plana/circular, cinco estilos, sem habilidades elementais/AI original/estados na simulação. Efeitos transitórios já lançados permanecem; poses, vida e postura são corrigidas a partir do snapshot, e a ressimulação não volta a emitir os mesmos efeitos.
+
+## Fase 7 — jogo todo online (Claude, em curso)
+
+Feito e validado (EditMode 57/57; CoreCLR sem desync):
+
+1. **Vírgula fixa sem BigInteger** (`Sim/Fix.cs`): 128 bits em `ulong`, bit a bit igual à versão anterior (3 pares de estilos × 3 min e 2 M operações aleatórias com o mesmo hash). Tick médio 125 → 6 µs, p99 980 → 59 µs, 116 KB → 0 B por tick.
+2. **Golpes e feedback numa só fonte**: o `SwordWielder` lê os golpes de `SwordData` e os arcos de `SwordGeometry.Arc`; PARRY/BLOCK/CLASH/GUARD BREAK/golpe usam `SwordWielder.Show*` no offline e no online (`Combatant.PresentNetEvent`). Pose externa com as mesmas taxas e o mesmo estremecer.
+3. **Impressão digital das regras** (`Sim/RulesFingerprint.cs`, gerado por `Editor/RulesFingerprintGenerator.cs` a partir de Sim/Rollback/Transport): entra no handshake ("Game version differs … git pull"), no filtro do lobby Steam e no rodapé do menu.
+4. **Efeitos sem duplicados**: `EventLedger` deduplica o mesmo (tipo, origem, alvo) numa janela de ±8 ticks.
+5. **Simulação para N lutadores**: `MatchState` com P0..P7 (`Count`), equipas (0 = hostil a todos), alvo por input (`TargetSlot`) ou o hostil mais próximo, `StruckMask` por alvo, codec v5. O 1v1 dá exatamente o mesmo rasto por tick (32 400 ticks comparados).
+6. **IA na simulação**: `Sim/DuelistBrain.cs` (porte do `DuelistAI`, RNG e memória no estado), bonecos (`FighterKind.Dummy`), recarga de vida do `Combatant` (`Refill`), DEFEATED/renascer. O host junta a IA da cena ao estado inicial (handshake comprimido, `Rollback/Packing.cs`). Menu Online: "AI enemies" e "Co-op vs AI".
+
+7. **Habilidades na simulação** (`Sim/Abilities.cs`): input com tecla da hotbar e ponto de mira (11 bytes), mana, recargas por espaço, dano mágico com resistências, estados com duração e resistência, projéteis Q0..Q15. **Dash** e **Bola de Fogo** portados (parâmetros lidos dos componentes da cena para a `AbilityTable`); VFX do offline conduzidos pelos eventos e pelas posições simuladas (`AbilityBar` como vista). O `MatchState` passa sempre por referência (`in`): o Mono não passa structs de ~12 KB por valor. Testes 60/60, incluindo bots a lançar com rollback 120 ms (123 lançamentos, 49 impactos, sem desync).
+
+Por fazer: restantes habilidades (WaterBall, WindBall, Lightning, Thunder, Kirin, Summon), interações elementais, VFX das habilidades conduzidos pela simulação, rede para 3–4 jogadores (malha Steam), números de dano de golpes previstos que não aconteceram.

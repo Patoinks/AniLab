@@ -1,9 +1,8 @@
 using System;
-using System.Numerics;
 
 namespace AnimLab.Netcode.Sim
 {
-    /// <summary>Q32.32. Os intermediários largos evitam overflow antes do deslocamento.</summary>
+    /// <summary>Q32.32. Intermediários de 128 bits em ulong, sem alocar; o mesmo resultado bit a bit que a versão com BigInteger.</summary>
     public readonly struct Fix : IEquatable<Fix>, IComparable<Fix>
     {
         public readonly long Raw;
@@ -14,15 +13,54 @@ namespace AnimLab.Netcode.Sim
         Fix(long raw) { Raw = raw; }
         public static Fix FromRaw(long raw) => new Fix(raw);
         public static Fix FromInt(int n) => FromRaw((long)n << 32);
-        public static Fix Ratio(long a, long b) => FromRaw((long)(((BigInteger)a << 32) / b));
+        public static Fix Ratio(long a, long b) => FromRaw(ShiftDivide(a, b));
+
+        // Produto 64×64 → 128 sem sinal, em metades de 32 bits.
+        static void Multiply(ulong x, ulong y, out ulong hi, out ulong lo)
+        {
+            ulong xl = (uint)x, xh = x >> 32, yl = (uint)y, yh = y >> 32;
+            ulong ll = xl * yl, lh = xl * yh, hl = xh * yl, hh = xh * yh;
+            ulong mid = (ll >> 32) + (uint)lh + (uint)hl;
+            lo = (mid << 32) | (uint)ll;
+            hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+        }
+        // (a·b) >> 32 com arredondamento para −∞; overflow lança, como o cast do BigInteger.
+        static long MultiplyShift(long a, long b)
+        {
+            Multiply((ulong)a, (ulong)b, out ulong hi, out ulong lo);
+            long top = unchecked((long)hi - (a < 0 ? b : 0) - (b < 0 ? a : 0));
+            if ((top >> 31) != 0 && (top >> 31) != -1) throw new OverflowException();
+            return unchecked((long)(((ulong)top << 32) | (lo >> 32)));
+        }
+        // (a << 32) / b truncado para zero; overflow lança, como o cast do BigInteger.
+        static long ShiftDivide(long a, long b)
+        {
+            if (b == 0) throw new DivideByZeroException();
+            if (a > int.MinValue && a < int.MaxValue) return (a << 32) / b;
+            bool negative = (a < 0) != (b < 0);
+            ulong n = a < 0 ? unchecked((ulong)-a) : (ulong)a, d = b < 0 ? unchecked((ulong)-b) : (ulong)b;
+            ulong hi = n >> 32, lo = n << 32;
+            if (hi >= d) throw new OverflowException();
+            // Divisão longa 128/64 bit a bit; o quociente cabe em 64 bits porque hi < d.
+            ulong q = 0, r = hi;
+            for (int i = 63; i >= 0; i--)
+            {
+                bool carry = (r >> 63) != 0;
+                r = (r << 1) | ((lo >> i) & 1); q <<= 1;
+                if (carry || r >= d) { r -= d; q |= 1; }
+            }
+            if (negative) { if (q > 1UL << 63) throw new OverflowException(); return unchecked(-(long)q); }
+            if (q > long.MaxValue) throw new OverflowException();
+            return (long)q;
+        }
         public int Floor => (int)(Raw >> 32);
         public int Ceil => (int)((Raw >> 32) + ((Raw & 0xffffffffL) != 0 ? 1 : 0));
         public static implicit operator Fix(int n) => FromInt(n);
         public static Fix operator +(Fix a, Fix b) => FromRaw(checked(a.Raw + b.Raw));
         public static Fix operator -(Fix a, Fix b) => FromRaw(checked(a.Raw - b.Raw));
         public static Fix operator -(Fix a) => FromRaw(checked(-a.Raw));
-        public static Fix operator *(Fix a, Fix b) => FromRaw((long)(((BigInteger)a.Raw * b.Raw) >> 32));
-        public static Fix operator /(Fix a, Fix b) => FromRaw((long)(((BigInteger)a.Raw << 32) / b.Raw));
+        public static Fix operator *(Fix a, Fix b) => FromRaw(MultiplyShift(a.Raw, b.Raw));
+        public static Fix operator /(Fix a, Fix b) => FromRaw(ShiftDivide(a.Raw, b.Raw));
         public static bool operator <(Fix a, Fix b) => a.Raw < b.Raw;
         public static bool operator >(Fix a, Fix b) => a.Raw > b.Raw;
         public static bool operator <=(Fix a, Fix b) => a.Raw <= b.Raw;
@@ -40,8 +78,11 @@ namespace AnimLab.Netcode.Sim
         {
             if (n.Raw < 0) throw new ArgumentOutOfRangeException(nameof(n));
             if (n.Raw == 0) return Zero;
-            BigInteger value = (BigInteger)n.Raw << 32, x = value, next = (x + 1) >> 1;
-            while (next < x) { x = next; next = (x + value / x) >> 1; }
+            // floor(√(Raw·2³²)): a estimativa em double só acelera; o acerto inteiro exato torna-a irrelevante para o resultado.
+            ulong vh = (ulong)n.Raw >> 32, vl = (ulong)n.Raw << 32;
+            ulong x = (ulong)Math.Sqrt(n.Raw * 4294967296.0);
+            while (true) { Multiply(x, x, out ulong h, out ulong l); if (h > vh || h == vh && l > vl) x--; else break; }
+            while (true) { Multiply(x + 1, x + 1, out ulong h, out ulong l); if (h < vh || h == vh && l <= vl) x++; else break; }
             return FromRaw((long)x);
         }
         static Fix Sample(long[] table, Fix u)

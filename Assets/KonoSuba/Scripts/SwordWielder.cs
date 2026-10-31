@@ -117,7 +117,7 @@ namespace AnimLab.KonoSuba
         }
 
         // Em rede reaproveita as mesmas poses e armas, sem input, dano ou varrimento.
-        public void ApplyNetState(AnimLab.Netcode.Sim.PlayerState value)
+        public void ApplyNetState(in AnimLab.Netcode.Sim.PlayerState value)
         {
             state = (State)value.Weapon;
             swingIndex = value.Swing;
@@ -138,15 +138,19 @@ namespace AnimLab.KonoSuba
             if (lastActive != null && active != lastActive) (shown, shownOff) = (shownOff, shown);
             lastActive = active;
             Pose target = TargetPose(out _);
+            // Mesmas taxas e o mesmo estremecer do offline (o relógio é o não escalado da sessão).
+            shake = Mathf.MoveTowards(shake, 0f, Time.unscaledDeltaTime * 6f);
             if (!hasShown || state == State.Active || state == State.Plunge && plungePhase == 1) shown = target;
             else
             {
-                float k = 1f - Mathf.Exp(-28f * Time.unscaledDeltaTime);
+                float rate = state == State.Idle ? 10f : state == State.Recoil ? 22f : state == State.Plunge ? 34f : 28f;
+                float k = 1f - Mathf.Exp(-rate * Time.unscaledDeltaTime);
                 shown.pos = Vector3.Lerp(shown.pos, target.pos, k);
                 shown.rot = Quaternion.Slerp(shown.rot, target.rot, k);
             }
             hasShown = true;
-            active.position = transform.TransformPoint(shown.pos);
+            Vector3 jolt = new Vector3(Mathf.Sin(Time.time * 90f) * 0.015f, 0f, -0.09f) * shake;
+            active.position = transform.TransformPoint(shown.pos + jolt);
             active.rotation = transform.rotation * shown.rot;
             Transform other = Other;
             if (other != null)
@@ -168,57 +172,35 @@ namespace AnimLab.KonoSuba
         [Tooltip("Vira-se para o inimigo mais próximo à frente, até esta distância (m).")]
         public float autoAimRange = 3.5f;
 
-        [Header("Golpes")]
-        public Swing[] combo =
+        // Os golpes de todos os estilos vivem só em Netcode/Sim/SwordData.cs (fonte única do offline e do online).
+        static readonly Dictionary<SwordStyle, Swing[]> movesByStyle = new Dictionary<SwordStyle, Swing[]>();
+        static Swing plungeSwing;
+        static Swing ToSwing(AnimLab.Netcode.Sim.SwingData d) => new Swing
         {
-            new Swing { damage = 18f, stagger = 30f, push = 2.2f, lunge = 0.3f },
-            new Swing { damage = 20f, stagger = 35f, push = 2.6f, lunge = 0.3f },
-            new Swing { windup = 0.18f, active = 0.14f, recovery = 0.42f, damage = 34f, stagger = 70f, push = 7f, lift = 3f, lunge = 0.55f, hitStop = 0.11f },
+            windup = AnimLab.Netcode.Unity.ViewConvert.Number(d.Windup), active = AnimLab.Netcode.Unity.ViewConvert.Number(d.Active),
+            recovery = AnimLab.Netcode.Unity.ViewConvert.Number(d.Recovery), damage = AnimLab.Netcode.Unity.ViewConvert.Number(d.Damage),
+            stagger = AnimLab.Netcode.Unity.ViewConvert.Number(d.Stagger), push = AnimLab.Netcode.Unity.ViewConvert.Number(d.Push),
+            lift = AnimLab.Netcode.Unity.ViewConvert.Number(d.Lift), lunge = AnimLab.Netcode.Unity.ViewConvert.Number(d.Lunge),
+            hitStop = AnimLab.Netcode.Unity.ViewConvert.Number(d.HitStop)
         };
-
-        [Tooltip("Golpe a pique: windup = preparação no ar; o resto do dano/empurrão é o da lâmina na descida.")]
-        public Swing plunge = new Swing { windup = 0.16f, active = 0f, recovery = 0.45f, damage = 30f, stagger = 55f, push = 3f, lift = 1.5f, lunge = 0f, hitStop = 0.08f };
+        public static Swing[] MovesOf(SwordStyle s)
+        {
+            if (movesByStyle.TryGetValue(s, out var moves)) return moves;
+            var sim = (AnimLab.Netcode.Sim.Style)s;
+            moves = new Swing[AnimLab.Netcode.Sim.SwordData.Count(sim)];
+            for (int i = 0; i < moves.Length; i++) moves[i] = ToSwing(AnimLab.Netcode.Sim.SwordData.Get(sim, i));
+            return movesByStyle[s] = moves;
+        }
+        /// <summary>Golpe a pique: windup = preparação no ar; o resto do dano/empurrão é o da lâmina na descida.</summary>
+        public Swing plunge => plungeSwing ??= ToSwing(AnimLab.Netcode.Sim.SwordData.Plunge);
         /// <summary>Chamado antes de cada pedido de ataque; devolve true se o pedido foi tratado (ex.: no ar → pique).</summary>
         public Func<bool> attackOverride;
 
         [Header("Estilo")]
         public SwordStyle style = SwordStyle.Knight;
-        [Tooltip("Golpes do estilo Fencer: estocada, estocada baixa e Lunge (investida longa).")]
-        public Swing[] fencerCombo =
-        {
-            new Swing { windup = 0.08f, active = 0.1f, recovery = 0.22f, damage = 13f, stagger = 18f, push = 1.2f, lunge = 0.45f, hitStop = 0.04f },
-            new Swing { windup = 0.08f, active = 0.1f, recovery = 0.24f, damage = 13f, stagger = 18f, push = 1.2f, lunge = 0.45f, hitStop = 0.04f },
-            new Swing { windup = 0.16f, active = 0.16f, recovery = 0.36f, damage = 28f, stagger = 45f, push = 3.5f, lunge = 2.4f, hitStop = 0.09f },
-        };
-        [Tooltip("Golpes do Reaper: Reap, Reverse Reap e Harvest (giro). push negativo = puxa o alvo.")]
-        public Swing[] reaperCombo =
-        {
-            new Swing { windup = 0.2f, active = 0.2f, recovery = 0.32f, damage = 22f, stagger = 30f, push = -3.5f, lunge = 0.2f, hitStop = 0.06f },
-            new Swing { windup = 0.18f, active = 0.2f, recovery = 0.34f, damage = 22f, stagger = 30f, push = -3.5f, lunge = 0.2f, hitStop = 0.06f },
-            new Swing { windup = 0.28f, active = 0.32f, recovery = 0.45f, damage = 32f, stagger = 55f, push = -5f, lunge = 0.1f, hitStop = 0.1f },
-        };
-
-        [Tooltip("Golpes das adagas: quatro cortes alternados (dir., esq., dir., esq.) e a estocada dupla.")]
-        public Swing[] daggerCombo =
-        {
-            new Swing { windup = 0.06f, active = 0.08f, recovery = 0.16f, damage = 9f, stagger = 14f, push = 0.8f, lunge = 0.35f, hitStop = 0.03f },
-            new Swing { windup = 0.06f, active = 0.08f, recovery = 0.16f, damage = 9f, stagger = 14f, push = 0.8f, lunge = 0.35f, hitStop = 0.03f },
-            new Swing { windup = 0.06f, active = 0.08f, recovery = 0.16f, damage = 9f, stagger = 14f, push = 0.8f, lunge = 0.35f, hitStop = 0.03f },
-            new Swing { windup = 0.06f, active = 0.08f, recovery = 0.16f, damage = 9f, stagger = 14f, push = 0.8f, lunge = 0.35f, hitStop = 0.03f },
-            new Swing { windup = 0.12f, active = 0.12f, recovery = 0.3f, damage = 20f, stagger = 35f, push = 2.5f, lunge = 0.6f, hitStop = 0.07f },
-        };
-
-        [Tooltip("Golpes do montante: Cleave, Sweep e Guard Breaker (o último parte a guarda).")]
-        public Swing[] greatswordCombo =
-        {
-            new Swing { windup = 0.32f, active = 0.2f, recovery = 0.45f, damage = 38f, stagger = 60f, push = 4f, lunge = 0.35f, hitStop = 0.1f },
-            new Swing { windup = 0.28f, active = 0.22f, recovery = 0.5f, damage = 38f, stagger = 60f, push = 5f, lunge = 0.3f, hitStop = 0.1f },
-            new Swing { windup = 0.42f, active = 0.18f, recovery = 0.6f, damage = 55f, stagger = 100f, push = 7f, lift = 2.5f, lunge = 0.45f, hitStop = 0.14f },
-        };
 
         /// <summary>Golpes do estilo atual.</summary>
-        public Swing[] Moves => style == SwordStyle.Fencer ? fencerCombo : style == SwordStyle.Reaper ? reaperCombo
-                              : style == SwordStyle.Daggers ? daggerCombo : style == SwordStyle.Greatsword ? greatswordCombo : combo;
+        public Swing[] Moves => MovesOf(style);
         /// <summary>A arma que o estilo atual usa (sem modelo próprio, a espada).</summary>
         public Transform Weapon => style == SwordStyle.Reaper && scythe != null ? scythe
                                  : style == SwordStyle.Greatsword && greatsword != null ? greatsword
@@ -613,53 +595,14 @@ namespace AnimLab.KonoSuba
         }
 
         /// <summary>Pose ao longo do arco do golpe i (u=0 início, u=1 fim; fora disso, extrapola).</summary>
+        // A geometria dos arcos vive só em Netcode/Sim/SwordData.cs (SwordGeometry.Arc): o offline e o online
+        // usam o mesmo arco. Adagas: os golpes ímpares são da mão esquerda (o mesmo corte, espelhado).
         Pose Arc(int i, float u)
         {
-            if (style == SwordStyle.Fencer) return FencerArc(i, u);
-            if (style == SwordStyle.Reaper) return ReaperArc(i, u);
-            if (style == SwordStyle.Daggers) return DaggerArc(i, u);
-            float arm = 0.48f + (bodyRadius - 0.3f) * 1.5f; // corpos mais largos, braço mais comprido
-            switch (i)
-            {
-                case 0: // corte horizontal, da direita para a esquerda, ligeiramente a descer
-                {
-                    float a = Mathf.LerpUnclamped(-35f, 205f, u) * Mathf.Deg2Rad;
-                    Vector3 d = new Vector3(Mathf.Cos(a), Mathf.LerpUnclamped(0.05f, -0.2f, u), Mathf.Sin(a)).normalized;
-                    Vector3 t = new Vector3(-Mathf.Sin(a), 0f, Mathf.Cos(a));
-                    return Make(new Vector3(0.12f, 1.22f, 0.05f) + d * arm, d, t);
-                }
-                case 1: // corte de volta, da esquerda para a direita, a subir
-                {
-                    float a = Mathf.LerpUnclamped(200f, -30f, u) * Mathf.Deg2Rad;
-                    Vector3 d = new Vector3(Mathf.Cos(a), Mathf.LerpUnclamped(-0.45f, 0.4f, u), Mathf.Sin(a)).normalized;
-                    Vector3 t = new Vector3(Mathf.Sin(a), 0.35f, -Mathf.Cos(a));
-                    return Make(new Vector3(0.05f, 1.15f, 0.05f) + d * (arm + 0.02f), d, t);
-                }
-                default: // golpe de cima: de trás da cabeça até à frente, em baixo
-                {
-                    float a = Mathf.LerpUnclamped(-45f, 125f, u) * Mathf.Deg2Rad;
-                    Vector3 d = new Vector3(0.12f, Mathf.Cos(a), Mathf.Sin(a)).normalized;
-                    Vector3 t = new Vector3(0f, -Mathf.Sin(a), Mathf.Cos(a));
-                    return Make(new Vector3(0.14f, 1.38f, 0.05f) + d * (arm + 0.02f), d, t);
-                }
-            }
-        }
-
-        // Adagas: cortes curtos e rentes ao corpo. Os ímpares são da mão esquerda (o mesmo corte, espelhado);
-        // o último é a estocada dupla (a outra adaga acompanha, ver OffPose).
-        Pose DaggerArc(int i, float u)
-        {
-            if (i >= 4)
-            {
-                Vector3 hand = Vector3.LerpUnclamped(new Vector3(0.2f, 1.12f, 0f), new Vector3(0.12f, 1.12f, 0.5f), u);
-                return Make(hand, new Vector3(0.02f, 0.05f, 1f), Vector3.up);
-            }
-            float a = Mathf.LerpUnclamped(0f, 150f, u) * Mathf.Deg2Rad;
-            float rise = i < 2 ? Mathf.LerpUnclamped(0.15f, -0.1f, u) : Mathf.LerpUnclamped(-0.25f, 0.25f, u);
-            Vector3 dir = new Vector3(Mathf.Cos(a), rise, Mathf.Sin(a)).normalized;
-            Vector3 edge = new Vector3(-Mathf.Sin(a), 0f, Mathf.Cos(a));
-            Pose p = Make(new Vector3(0.12f, 1.15f, 0.05f) + dir * 0.42f, dir, edge);
-            return i % 2 == 1 ? Mirror(p) : p;
+            var p = AnimLab.Netcode.Sim.SwordGeometry.Arc((AnimLab.Netcode.Sim.Style)style, i,
+                AnimLab.Netcode.Unity.ViewConvert.Fixed(u), AnimLab.Netcode.Unity.ViewConvert.Fixed(bodyRadius));
+            Vector3 y = AnimLab.Netcode.Unity.ViewConvert.Vector(p.Y), z = AnimLab.Netcode.Unity.ViewConvert.Vector(p.Z);
+            return new Pose { pos = AnimLab.Netcode.Unity.ViewConvert.Vector(p.Hand), rot = Quaternion.LookRotation(z, y) };
         }
 
         // Pose da adaga que não está a golpear: acompanha a estocada dupla, cruza na guarda, ou fica pronta.
@@ -677,48 +620,6 @@ namespace AnimLab.KonoSuba
         {
             Vector3 dir = p.rot * Vector3.up, edge = p.rot * Vector3.right;
             return Make(new Vector3(-p.pos.x, p.pos.y, p.pos.z), new Vector3(-dir.x, dir.y, dir.z), new Vector3(-edge.x, edge.y, edge.z));
-        }
-
-        // Foice: o cabo vai no raio e a lâmina (+X local) lidera o golpe. Arcos quase horizontais, à altura do
-        // peito (o cabo é comprido: a descer, a lâmina rasava o chão).
-        Pose ReaperArc(int i, float u)
-        {
-            float a, rise;
-            switch (i)
-            {
-                case 0: a = Mathf.LerpUnclamped(-40f, 220f, u); rise = 0.12f; break;     // Reap
-                case 1: a = Mathf.LerpUnclamped(215f, -45f, u); rise = 0.2f; break;      // Reverse Reap
-                default: a = Mathf.LerpUnclamped(-60f, 420f, u); rise = 0.06f; break;    // Harvest: giro completo
-            }
-            float r = a * Mathf.Deg2Rad;
-            Vector3 d = new Vector3(Mathf.Cos(r), rise, Mathf.Sin(r)).normalized;
-            Vector3 t = new Vector3(-Mathf.Sin(r), 0f, Mathf.Cos(r)) * (i == 1 ? -1f : 1f);
-            return Make(new Vector3(0.05f, 1.12f, 0.05f) + d * 0.45f, d, t);
-        }
-
-        // Estocadas do Fencer: a mão recua e dispara a direito, a lâmina sempre apontada para a frente.
-        Pose FencerArc(int i, float u)
-        {
-            float k = Mathf.Clamp(u, -0.2f, 1.1f);
-            Vector3 from, to, dir0, dir1;
-            switch (i)
-            {
-                case 0: // estocada
-                    from = new Vector3(0.2f, 1.28f, 0.02f); to = new Vector3(0.1f, 1.34f, 0.62f);
-                    dir0 = new Vector3(0.08f, 0.12f, 1f); dir1 = new Vector3(0f, 0.02f, 1f);
-                    break;
-                case 1: // estocada baixa
-                    from = new Vector3(0.24f, 1.05f, 0f); to = new Vector3(0.08f, 0.98f, 0.6f);
-                    dir0 = new Vector3(0.1f, -0.05f, 1f); dir1 = new Vector3(-0.02f, -0.12f, 1f);
-                    break;
-                default: // Lunge: recolhe bem atrás e dispara com o corpo todo
-                    from = new Vector3(0.3f, 1.32f, -0.2f); to = new Vector3(0.06f, 1.22f, 0.78f);
-                    dir0 = new Vector3(0.15f, 0.2f, 1f); dir1 = new Vector3(0f, 0f, 1f);
-                    break;
-            }
-            Vector3 hand = Vector3.LerpUnclamped(from, to, k);
-            Vector3 dir = Vector3.Slerp(dir0.normalized, dir1.normalized, Mathf.Clamp01(k));
-            return Make(hand, dir, Vector3.up);
         }
 
         /// <summary>Lâmina ao longo de dir (Y local) com o gume virado para edge (X local).</summary>
@@ -848,10 +749,8 @@ namespace AnimLab.KonoSuba
             });
             // Quem leva um golpe a meio do seu próprio golpe perde-o.
             if (guard != null && guard.IsAttacking && c.IsStaggered) guard.Interrupt();
-            HitStop.Do(sw.hitStop);
             // Faíscas a sair na direção em que a lâmina corre (e um pouco para fora do alvo).
-            SwordSparks.Burst(point, run.normalized + away.normalized * 0.5f, Heavy ? 22 : 12, sparkColor,
-                              speed: 8f, spread: 0.5f, flash: Heavy ? 0.28f : 0.16f);
+            ShowHit(point, run.normalized + away.normalized * 0.5f, Heavy, sparkColor, sw.hitStop);
             AnyBladeHit?.Invoke(this, c, point);
             return false;
         }
@@ -875,10 +774,7 @@ namespace AnimLab.KonoSuba
                 attacker.self.Knock(toAttacker.normalized * 3f);
             }
             shake = 1f;
-            SwordSparks.Burst(at, toAttacker.normalized + Vector3.up * 0.4f, 34, ParryColor, speed: 10f, spread: 0.75f, flash: 0.42f);
-            HitStop.Do(0.12f);
-            HitStop.Then(0.45f, 0.3f);
-            Combat.Callout(at + Vector3.up * 0.55f, "PARRY", ParryColor, 34f);
+            ShowParry(at, toAttacker);
             AnyGuarded?.Invoke(attacker, this, true);
         }
 
@@ -895,17 +791,12 @@ namespace AnimLab.KonoSuba
                     stagger = sw.stagger * attacker.staggerScale * 0.6f,
                     knockback = fromAttacker.normalized * sw.push * 0.45f, point = at, source = attacker.transform
                 });
-            if (self != null && !wasStaggered && self.IsStaggered)
-            {
-                Combat.Callout(at + Vector3.up * 0.55f, "GUARD BREAK", BreakColor, 28f);
-                state = State.Idle;
-            }
+            bool broken = self != null && !wasStaggered && self.IsStaggered;
+            if (broken) state = State.Idle;
             // (o montante é pesado: não ressalta na guarda e o combo segue até ao Guard Breaker)
             if (attacker.style != SwordStyle.Greatsword) attacker.Recoil(0.22f);
             shake = 1f;
-            if (self == null || !self.IsStaggered) Combat.Callout(at + Vector3.up * 0.45f, "BLOCK", new Color(0.78f, 0.82f, 0.9f), 18f);
-            SwordSparks.Burst(at, -fromAttacker.normalized + Vector3.up * 0.3f, 14, sparkColor, speed: 7f, spread: 0.6f, flash: 0.18f);
-            HitStop.Do(0.05f);
+            ShowBlock(at, fromAttacker, sparkColor, broken);
             AnyGuarded?.Invoke(attacker, this, false);
         }
 
@@ -924,9 +815,7 @@ namespace AnimLab.KonoSuba
                 });
                 self.Stagger(1.2f);
             }
-            SwordSparks.Burst(at, -fromAttacker.normalized + Vector3.up * 0.4f, 30, new Color(1f, 0.6f, 0.35f), speed: 9f, spread: 0.7f, flash: 0.4f);
-            HitStop.Do(0.12f);
-            Combat.Callout(at + Vector3.up * 0.55f, "GUARD BREAK", BreakColor, 30f);
+            ShowGuardBreak(at, fromAttacker);
             AnyGuarded?.Invoke(attacker, this, false);
         }
 
@@ -940,13 +829,50 @@ namespace AnimLab.KonoSuba
             shake = other.shake = 1f;
             if (self != null) self.Knock(apart * 3.5f);
             if (other.self != null) other.self.Knock(-apart * 3.5f);
+            ShowClash(at, apart, sparkColor);
+            AnyClash?.Invoke(this, other);
+        }
+
+        // ------------------------------------------------------------------ Feedback
+        // Faíscas, paragens e callouts de cada contacto. Os mesmos para o offline e para os eventos da rede.
+
+        public static void ShowHit(Vector3 point, Vector3 spray, bool heavy, Color spark, float hitStop)
+        {
+            HitStop.Do(hitStop);
+            SwordSparks.Burst(point, spray, heavy ? 22 : 12, spark, speed: 8f, spread: 0.5f, flash: heavy ? 0.28f : 0.16f);
+        }
+        public static void ShowParry(Vector3 at, Vector3 toAttacker)
+        {
+            SwordSparks.Burst(at, toAttacker.normalized + Vector3.up * 0.4f, 34, ParryColor, speed: 10f, spread: 0.75f, flash: 0.42f);
+            HitStop.Do(0.12f);
+            HitStop.Then(0.45f, 0.3f);
+            Combat.Callout(at + Vector3.up * 0.55f, "PARRY", ParryColor, 34f);
+        }
+        /// <param name="broken">A postura partiu com este bloqueio: mostra GUARD BREAK em vez de BLOCK.</param>
+        public static void ShowBlock(Vector3 at, Vector3 fromAttacker, Color spark, bool broken)
+        {
+            if (broken) Combat.Callout(at + Vector3.up * 0.55f, "GUARD BREAK", BreakColor, 28f);
+            else Combat.Callout(at + Vector3.up * 0.45f, "BLOCK", new Color(0.78f, 0.82f, 0.9f), 18f);
+            SwordSparks.Burst(at, -fromAttacker.normalized + Vector3.up * 0.3f, 14, spark, speed: 7f, spread: 0.6f, flash: 0.18f);
+            HitStop.Do(0.05f);
+        }
+        public static void ShowGuardBreak(Vector3 at, Vector3 fromAttacker)
+        {
+            SwordSparks.Burst(at, -fromAttacker.normalized + Vector3.up * 0.4f, 30, new Color(1f, 0.6f, 0.35f), speed: 9f, spread: 0.7f, flash: 0.4f);
+            HitStop.Do(0.12f);
+            Combat.Callout(at + Vector3.up * 0.55f, "GUARD BREAK", BreakColor, 30f);
+        }
+        /// <param name="apart">Do outro para quem detetou o clash; spark = cor de quem detetou.</param>
+        public static void ShowClash(Vector3 at, Vector3 apart, Color spark)
+        {
             SwordSparks.Burst(at, Vector3.up + apart * 0.6f, 22, ClashColor, speed: 10f, spread: 0.8f, flash: 0.5f);
-            SwordSparks.Burst(at, Vector3.up - apart * 0.6f, 22, sparkColor, speed: 10f, spread: 0.8f, flash: 0f);
+            SwordSparks.Burst(at, Vector3.up - apart * 0.6f, 22, spark, speed: 10f, spread: 0.8f, flash: 0f);
             HitStop.Do(0.14f);
             HitStop.Then(0.25f, 0.45f);
             Combat.Callout(at + Vector3.up * 0.5f, "CLASH", ClashColor, 32f);
-            AnyClash?.Invoke(this, other);
         }
+        /// <summary>A lâmina treme (parry, bloqueio, clash); também usado quando o estado vem da rede.</summary>
+        public void Shake() => shake = 1f;
 
         /// <summary>Distância mínima entre os segmentos p0–p1 e q0–q1; at = ponto médio entre os mais próximos.</summary>
         static float SegmentDistance(Vector3 p0, Vector3 p1, Vector3 q0, Vector3 q1, out Vector3 at)
