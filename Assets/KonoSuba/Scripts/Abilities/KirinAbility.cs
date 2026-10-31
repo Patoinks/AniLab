@@ -13,6 +13,10 @@ namespace AnimLab.KonoSuba
         [Tooltip("Impacto no chão (o mesmo do trovão).")]
         public LightningImpactMaterials impact;
         public float range = 14f;
+        [Header("Golpe")]
+        public float damage = 90f;
+        [Tooltip("Raio da descarga no impacto: os corpos dentro levam dano (até 40% na borda).")]
+        public float blastRadius = 2.5f;
 
         void Reset()
         {

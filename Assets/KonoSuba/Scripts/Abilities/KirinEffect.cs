@@ -15,6 +15,8 @@ namespace AnimLab.KonoSuba
         static readonly int ColorId = Shader.PropertyToID("_LightningColor");
 
         LockOnTarget target;
+        KirinAbility ability;
+        Transform caster;
         Material material, eyeMaterial;
         LightningImpactMaterials impactMaterials;
         Vector3 casterPoint, destination, lateral;
@@ -39,6 +41,8 @@ namespace AnimLab.KonoSuba
             var go = new GameObject("Kirin");
             var effect = go.AddComponent<KirinEffect>();
             effect.target = ctx.target;
+            effect.ability = ability;
+            effect.caster = ctx.caster;
             effect.material = ability.animeMaterial;
             effect.eyeMaterial = ability.eyeMaterial != null ? ability.eyeMaterial : ability.animeMaterial;
             effect.impactMaterials = ability.impact;
@@ -112,6 +116,13 @@ namespace AnimLab.KonoSuba
                 Vector3 impact = dragon.ImpactPoint;
                 FogField.Blast(impact, radius: 5f, duration: 1.2f, expandTime: 0.18f, waterScale: 0f);
                 WaterSim.Impulse(impact, 0.8f, -0.025f);
+                if (ability != null)
+                    Combat.Explode(impact, ability.blastRadius, new HitInfo
+                    {
+                        damage = ability.damage * ability.SpellPower, element = AbilityElement.Lightning,
+                        status = StatusType.Static, statusDuration = 4f, stagger = 50f,
+                        knockback = Vector3.up * 1.5f, source = caster
+                    }, target != null ? target.GetComponentInParent<Combatant>() : null);
                 if (impactMaterials != null && impactMaterials.cracks != null)
                 {
                     LightningImpact.Create(impact, impactMaterials, seed);
