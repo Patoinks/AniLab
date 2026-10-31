@@ -73,8 +73,15 @@ namespace AnimLab.KonoSuba
             return null;
         }
 
-        /// <summary>O Dash é geral; as outras têm de estar aprendidas numa das árvores escolhidas.</summary>
-        public bool CanUse(Ability a) => a != null && (a is DashAbility || stats == null || stats.KnowsAbility(a.displayName));
+        /// <summary>
+        /// O Dash é geral; as outras têm de estar aprendidas numa das árvores escolhidas. As de teste
+        /// (ElementTestAbility, só em desenvolvimento) também passam.
+        /// </summary>
+        public bool CanUse(Ability a) => a != null && (a is DashAbility || a is ElementTestAbility || stats == null
+            || stats.KnowsAbility(a.displayName));
+
+        /// <summary>Aspeto de uma habilidade juntada depois do Start (ex.: as de teste).</summary>
+        public void RegisterVisual(Ability a, Texture2D icon, GameHud.Glyph glyph) => visuals[a] = (icon, glyph);
 
         public bool Visual(Ability a, out Texture2D icon, out GameHud.Glyph glyph)
         {

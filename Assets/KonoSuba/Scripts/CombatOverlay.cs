@@ -68,6 +68,9 @@ namespace AnimLab.KonoSuba
         void OnHit(Combatant c, HitInfo hit)
         {
             if (hit.damage < 0.5f) return;
+            // Fogo, água e eletricidade têm números próprios no mundo (letras em degradê com o elemento atrás).
+            if (ElementDamageNumber.Spawn(c.NameplatePoint - Vector3.up * 0.3f, Mathf.RoundToInt(hit.damage),
+                    hit.critical, hit.element)) return;
             // Crítico: maior, dourado e com "!".
             bool big = hit.damage >= 40f || hit.critical;
             string text = Mathf.RoundToInt(hit.damage) + (hit.critical ? "!" : "");
