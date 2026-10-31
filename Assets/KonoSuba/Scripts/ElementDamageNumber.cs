@@ -4,8 +4,8 @@ using UnityEngine.TextCore.Text;
 namespace AnimLab.KonoSuba
 {
     /// <summary>
-    /// Número de dano elemental (fogo, água, eletricidade): uma quad virada para a câmara com o efeito do
-    /// elemento atrás das letras (KonoSuba/ElementDamageNumber). Tamanho constante no ecrã.
+    /// Número de dano elemental (fogo, água, eletricidade, ar, terra, gelo, trevas): uma quad virada para a câmara
+    /// com o efeito do elemento atrás das letras (KonoSuba/ElementDamageNumber). Tamanho constante no ecrã.
     /// Críticos: "!" no fim, maiores, a tremer e com os algarismos a saltar em onda.
     /// </summary>
     public class ElementDamageNumber : MonoBehaviour
@@ -37,7 +37,7 @@ namespace AnimLab.KonoSuba
         Vector3 world;
         Vector2 drift;
         float age, lifetime, seed, capHalf;
-        int style; // 0 fogo, 1 água, 2 eletricidade (como no shader)
+        int style; // 0 fogo, 1 água, 2 eletricidade, 3 ar, 4 terra, 5 gelo, 6 trevas (como no shader)
         bool crit;
         Mesh mesh;
         MeshRenderer meshRenderer;
@@ -53,6 +53,10 @@ namespace AnimLab.KonoSuba
                 AbilityElement.Fire => 0,
                 AbilityElement.Water => 1,
                 AbilityElement.Lightning => 2,
+                AbilityElement.Air => 3,
+                AbilityElement.Earth => 4,
+                AbilityElement.Ice => 5,
+                AbilityElement.Dark => 6,
                 _ => -1
             };
             if (style < 0 || !Load()) return false;
@@ -116,11 +120,13 @@ namespace AnimLab.KonoSuba
             capHalf = cap * 0.5f;
             for (int i = 0; i < count; i++) { baseBoxes[i].x -= width * 0.5f; baseBoxes[i].y -= cap * 0.5f; }
 
-            // A quad tem folga para o efeito (chamas em cima, gotas em baixo, arcos à volta) e para o salto
-            // dos críticos.
-            float x0 = -width * 0.5f - 0.3f, x1 = width * 0.5f + 0.3f;
-            float y0 = -cap * 0.5f - (style == 1 ? (crit ? 0.75f : 0.6f) : 0.3f);
-            float y1 = cap * 0.5f + (style == 0 ? (crit ? 0.9f : 0.7f) : 0.35f) + (crit ? 0.1f : 0f);
+            // A quad tem folga para o efeito (chamas/fumo/espigões em cima, gotas/pingentes/pó em baixo, rajadas
+            // à direita, arcos à volta) e para o salto dos críticos.
+            float k = crit ? 1.2f : 1f;
+            float x0 = -width * 0.5f - 0.3f, x1 = width * 0.5f + (style == 3 ? 0.75f * k : 0.3f);
+            float y0 = -cap * 0.5f - (style == 1 ? 0.6f * k : style == 4 || style == 5 ? 0.45f * k : 0.3f);
+            float y1 = cap * 0.5f + (style == 0 || style == 6 ? 0.7f * k : style == 5 ? 0.6f * k : 0.35f)
+                + (crit ? 0.1f : 0f);
             var verts = new[] { new Vector3(x0, y0), new Vector3(x1, y0), new Vector3(x0, y1), new Vector3(x1, y1) };
             mesh = new Mesh { name = "ElementDamageNumber", hideFlags = HideFlags.DontSave };
             mesh.vertices = verts;
@@ -158,10 +164,18 @@ namespace AnimLab.KonoSuba
             // Soco: entra grande e assenta em ~0.14 s.
             float pop = Mathf.Clamp01(age / 0.14f);
             float s = Mathf.Lerp(crit ? 2.3f : 1.8f, 1f, 1f - (1f - pop) * (1f - pop));
-            // Fogo e eletricidade sobem; a água cai um pouco no fim, como se escorresse.
+            // Sobem por defeito; a água cai um pouco no fim (escorre), a terra cai com peso, o ar é levado
+            // para o lado pelo vento.
             float up = (crit ? 50f : 65f) * (1f - (1f - t) * (1f - t));
             if (style == 1) up = 40f * Mathf.Sin(Mathf.Min(t, 0.5f) * Mathf.PI) - 25f * Mathf.Max(0f, t - 0.5f) * 2f;
-            Vector2 px = drift + new Vector2(0f, up);
+            if (style == 4) up = 30f * Mathf.Sin(Mathf.Min(t, 0.4f) / 0.4f * Mathf.PI * 0.5f) - 160f * Mathf.Pow(Mathf.Max(0f, t - 0.55f), 2f);
+            Vector2 px = drift + new Vector2(style == 3 ? -90f * t * t : 0f, up);
+            if (style == 4 && age < 0.18f)
+            {
+                // Terra: um baque seco ao aterrar, mesmo sem crítico.
+                float thud = (1f - age / 0.18f) * 6f;
+                px += new Vector2(Mathf.PerlinNoise(age * 50f, seed) - 0.5f, Mathf.PerlinNoise(seed, age * 50f) - 0.5f) * (2f * thud);
+            }
             if (crit)
             {
                 // Tremer: forte no impacto e nunca para de todo.
