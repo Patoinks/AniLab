@@ -71,4 +71,4 @@ em Play: golpes reais no boneco geram o número certo de cada elemento, sem erro
 | `0da3ca9` | Primeiros números de dano (fogo), Bola de Fogo com dano inventado, PlanarReflection sem UI |
 | `0b27b76` | Merge com o origin/main (combate, netcode, hotbar), sem conflitos |
 | `b9eeb78` | Números ligados ao CombatOverlay (dano real); fogo, água, eletricidade; dano do Kirin |
-| 82a94e5 | Ar, terra, gelo, trevas; habilidades de teste na hotbar; este documento |
+| `1321e31` | Ar, terra, gelo, trevas; habilidades de teste na hotbar; este documento |
