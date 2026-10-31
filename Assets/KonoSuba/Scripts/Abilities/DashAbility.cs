@@ -8,8 +8,13 @@ namespace AnimLab.KonoSuba
     /// Não usa o ambiente, mas mexe nele: o ar deslocado abre um rasto no nevoeiro e, mais fraco
     /// (a água é mais pesada), na água, com salpicos à partida e à chegada.
     /// </summary>
-    public class DashAbility : Ability
+    public class DashAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource
     {
+        public void CaptureNetAbility(ref AnimLab.Netcode.Sim.AbilityTable t)
+        {
+            t.DashMana = AnimLab.Netcode.Unity.ViewConvert.Fixed(manaCost); t.DashCooldown = AnimLab.Netcode.Unity.ViewConvert.Fixed(cooldown);
+            t.DashDistance = AnimLab.Netcode.Unity.ViewConvert.Fixed(distance); t.DashDuration = AnimLab.Netcode.Unity.ViewConvert.Fixed(duration);
+        }
         public float distance = 4.5f;
         public float duration = 0.16f;
 

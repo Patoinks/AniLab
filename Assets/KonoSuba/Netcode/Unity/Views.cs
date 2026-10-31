@@ -15,19 +15,44 @@ namespace AnimLab.Netcode.Unity
         bool ExternalDrive { get; set; }
         void CaptureNetConfig(ref PlayerConfig config);
         PlayerInput SampleNetInput();
-        void ApplyNetState(PlayerState state, Vector3 position, float yaw);
+        void ApplyNetState(in PlayerState state, Vector3 position, float yaw);
     }
     public interface INetCombatView
     {
         bool ExternalDrive { get; set; }
         void CaptureNetConfig(ref PlayerConfig config);
-        void ApplyNetState(PlayerState state);
-        void PresentNetEvent(SimEvent ev);
+        void ApplyNetState(in PlayerState state);
+        /// <param name="source">O corpo de quem causou o evento (a cor das faíscas é a da arma dele).</param>
+        void PresentNetEvent(SimEvent ev, Component source);
+    }
+    /// <summary>Componentes que contribuem para a configuração do lutador (hotbar, mana, ficha).</summary>
+    public interface INetConfigSource
+    {
+        void CaptureNetConfig(ref PlayerConfig config);
+    }
+    /// <summary>Habilidade da cena que dá os seus parâmetros à tabela da partida.</summary>
+    public interface INetAbilitySource
+    {
+        void CaptureNetAbility(ref AbilityTable table);
+    }
+    /// <summary>Habilidades do lutador conduzidas pela simulação: VFX dos lançamentos, impactos e projéteis.</summary>
+    public interface INetAbilityView
+    {
+        bool ExternalDrive { get; set; }
+        void PresentNetAbility(SimEvent ev, GameObject other);
+        void SyncProjectile(int slot, ProjectileState now, ProjectileState before, float alpha, float dt);
+        void ClearProjectile(int slot);
+        void ApplyNetState(in PlayerState state, float now);
+    }
+    /// <summary>A IA do lutador (DuelistAI): passa os parâmetros do Inspector para a IA da simulação.</summary>
+    public interface INetBrainView
+    {
+        void CaptureNetBrain(ref AiState ai);
     }
     public interface INetSwordView
     {
         bool ExternalDrive { get; set; }
         void CaptureNetConfig(ref PlayerConfig config);
-        void ApplyNetState(PlayerState state);
+        void ApplyNetState(in PlayerState state);
     }
 }

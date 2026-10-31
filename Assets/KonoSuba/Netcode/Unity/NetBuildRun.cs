@@ -60,7 +60,7 @@ namespace AnimLab.Netcode.Unity
                 Match.DirectPeer.ChecksumsVerified>=Match.TickLimit/30 && Match.DirectPeer.Desync==null;
             Application.Quit(success?0:2);
         }
-        static void Capture(string path,RenderTexture ui)
+        public static void Capture(string path,RenderTexture ui)
         {
             var camera=Camera.main; if(camera==null) return;
             var hdr=new RenderTexture(1280,720,24,RenderTextureFormat.DefaultHDR);

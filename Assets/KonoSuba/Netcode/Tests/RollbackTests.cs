@@ -56,11 +56,13 @@ namespace AnimLab.Netcode.Tests
         [TestCase(0,0,0,1200)]
         [TestCase(120,20,2,10800)]
         [TestCase(200,45,10,1800)]
-        public void LoopbackProtocolMatchesOracleWithLatencyJitterLoss(int latency,int jitter,int loss,int ticks)
+        [TestCase(120,20,2,10800,true)]
+        public void LoopbackProtocolMatchesOracleWithLatencyJitterLoss(int latency,int jitter,int loss,int ticks,bool withAI=false)
         {
             var initial=MatchState.Create(); initial.P0.Health=initial.P1.Health=100000;
             initial.P0.Config.MaxHealth=initial.P1.Config.MaxHealth=100000;
             initial.P0.Config.Style=Style.Reaper; initial.P1.Config.Style=Style.Daggers;
+            if(withAI) foreach(var f in AiTests.Fighters()) MatchState.Add(ref initial,f);
             using(var match=new LoopbackMatch(initial,latency,jitter,loss)) {
                 var aInputs=new PlayerInput[ticks+16]; var bInputs=new PlayerInput[ticks+16];
                 var aKnown=new bool[ticks+16]; var bKnown=new bool[ticks+16]; aKnown[0]=aKnown[1]=bKnown[0]=bKnown[1]=true;

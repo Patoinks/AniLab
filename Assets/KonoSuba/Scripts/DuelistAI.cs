@@ -17,8 +17,16 @@ namespace AnimLab.KonoSuba
     /// Mexe-se pelo CapsulePlayer (aiControlled) e luta pelo SwordWielder (RequestAttack / guardHeld).
     /// </summary>
     [RequireComponent(typeof(CapsulePlayer), typeof(SwordWielder), typeof(Combatant))]
-    public class DuelistAI : MonoBehaviour
+    public class DuelistAI : MonoBehaviour, AnimLab.Netcode.Unity.INetBrainView
     {
+        /// <summary>Os mesmos parâmetros para a IA da simulação (partidas online).</summary>
+        public void CaptureNetBrain(ref AnimLab.Netcode.Sim.AiState ai)
+        {
+            ai.Skill = AnimLab.Netcode.Unity.ViewConvert.Fixed(skill); ai.Aggression = AnimLab.Netcode.Unity.ViewConvert.Fixed(aggression);
+            ai.ReactMin = AnimLab.Netcode.Unity.ViewConvert.Fixed(reactionTime.x); ai.ReactMax = AnimLab.Netcode.Unity.ViewConvert.Fixed(reactionTime.y);
+            ai.AggroRange = AnimLab.Netcode.Unity.ViewConvert.Fixed(aggroRange); ai.AttackRange = AnimLab.Netcode.Unity.ViewConvert.Fixed(attackRange);
+            ai.FootsieRange = AnimLab.Netcode.Unity.ViewConvert.Fixed(footsieRange); ai.RespawnDelay = AnimLab.Netcode.Unity.ViewConvert.Fixed(respawnDelay);
+        }
         [Tooltip("Adversário (por omissão, o Player).")]
         public Transform opponent;
         [Range(0f, 1f), Tooltip("Precisão do parry, leitura do adversário, menos erros.")]

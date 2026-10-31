@@ -258,6 +258,8 @@ namespace AnimLab.KonoSuba
             {
                 health = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Health);
                 maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxHealth);
+                mana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Mana);
+                maxMana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxMana);
                 statsWindow?.SetOpen(false);
                 skillTrees?.SetOpen(false);
             }

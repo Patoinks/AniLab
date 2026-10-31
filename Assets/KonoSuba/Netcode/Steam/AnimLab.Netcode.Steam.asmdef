@@ -1,0 +1,1 @@
+{"name":"AnimLab.Netcode.Steam","rootNamespace":"AnimLab.Netcode.Steam","references":["AnimLab.Netcode.Sim","AnimLab.Netcode.Rollback","AnimLab.Netcode.Transport","com.rlabrecque.steamworks.net"],"noEngineReferences":true}

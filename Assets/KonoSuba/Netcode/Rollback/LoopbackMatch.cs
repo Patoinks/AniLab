@@ -13,7 +13,7 @@ namespace AnimLab.Netcode.Rollback
         public int Attempts { get; private set; }
         public bool FirstQueued { get; private set; }
         public bool SecondQueued { get; private set; }
-        public LoopbackMatch(MatchState initial,int latencyMs=120,int jitterMs=20,int lossPercent=2,int delay=2)
+        public LoopbackMatch(in MatchState initial,int latencyMs=120,int jitterMs=20,int lossPercent=2,int delay=2)
         {
             Network=new LoopbackNetwork(latencyMs,jitterMs,lossPercent);
             A=new RollbackPeer(new RollbackSession(initial,0,delay),Network.A);
@@ -21,16 +21,19 @@ namespace AnimLab.Netcode.Rollback
         }
         public void Pump(long nowMs) { Network.Advance(nowMs); A.Pump(nowMs); B.Pump(nowMs); }
         public void Send(long nowMs) { A.SendInputs(nowMs); B.SendInputs(nowMs); }
+        /// <summary>Os bots também lançam habilidades da hotbar.</summary>
+        public bool BotsCast;
+        PlayerInput Bot(RollbackSession s) => BotsCast ? BotInputs.Caster(s.State.Tick,s.LocalPlayer,s.State) : BotInputs.Combat(s.State.Tick,s.LocalPlayer,s.State);
         public void Tick(long nowMs,int limit=int.MaxValue,PlayerInput? firstInput=null,PlayerInput? secondInput=null)
         {
             Attempts++; Pump(nowMs);
             FirstQueued=SecondQueued=false;
             if(A.Session.State.Tick<limit) {
-                FirstQueued=A.Session.QueueLocal(firstInput??BotInputs.Combat(A.Session.State.Tick,0,A.Session.State));
+                FirstQueued=A.Session.QueueLocal(firstInput??Bot(A.Session));
                 A.Session.TryAdvance();
             }
             if(B.Session.State.Tick<limit) {
-                SecondQueued=B.Session.QueueLocal(secondInput??BotInputs.Combat(B.Session.State.Tick,1,B.Session.State));
+                SecondQueued=B.Session.QueueLocal(secondInput??Bot(B.Session));
                 B.Session.TryAdvance();
             }
             Send(nowMs); Pump(nowMs);

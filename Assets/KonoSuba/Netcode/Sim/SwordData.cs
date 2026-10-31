@@ -39,7 +39,7 @@ namespace AnimLab.Netcode.Sim
                 default: return knight[i];
             }
         }
-        public static Fix ArcU(PlayerState p) => 1 - Fix.Pow22(1 - Fix.Clamp01(p.WeaponTime / Get(p.Config.Style,p.Swing).Active));
+        public static Fix ArcU(in PlayerState p) => 1 - Fix.Pow22(1 - Fix.Clamp01(p.WeaponTime / Get(p.Config.Style,p.Swing).Active));
     }
 
     public struct BladePose
@@ -105,7 +105,7 @@ namespace AnimLab.Netcode.Sim
                 return Make(V(14,138,5)+d*(arm+F(2)),d,new FixVec3(0,-Fix.Sin(a),Fix.Cos(a)));
             }
         }
-        public static void Blade(PlayerState p, Fix u, out FixVec3 a, out FixVec3 b)
+        public static void Blade(in PlayerState p, Fix u, out FixVec3 a, out FixVec3 b)
         {
             BladePose pose = p.Weapon == WeaponState.Plunge
                 ? Make(V(2,100,42),V(0,-100,10),FixVec3.Forward) : Arc(p.Config.Style,p.Swing,u,F(30));
@@ -136,7 +136,7 @@ namespace AnimLab.Netcode.Sim
             FixVec3 c1=p0+d1*s,c2=q0+d2*t; at=(c1+c2)*F(50);
             return (c1-c2).Length;
         }
-        public static FixVec3 ClosestPoint(PlayerState p, FixVec3 point)
+        public static FixVec3 ClosestPoint(in PlayerState p, FixVec3 point)
         {
             Fix half=Fix.Max(0,p.Config.Height/2-p.Config.Radius);
             FixVec3 center=p.Position+FixVec3.Up*p.Config.CenterY;
@@ -144,7 +144,7 @@ namespace AnimLab.Netcode.Sim
             FixVec3 d=point-axis;
             return d.LengthSquared<=p.Config.Radius*p.Config.Radius?point:axis+d.Normalized*p.Config.Radius;
         }
-        public static Fix CapsuleDistance(PlayerState p, FixVec3 a, FixVec3 b, out FixVec3 at)
+        public static Fix CapsuleDistance(in PlayerState p, FixVec3 a, FixVec3 b, out FixVec3 at)
         {
             Fix half=Fix.Max(0,p.Config.Height/2-p.Config.Radius);
             FixVec3 center=p.Position+FixVec3.Up*p.Config.CenterY;

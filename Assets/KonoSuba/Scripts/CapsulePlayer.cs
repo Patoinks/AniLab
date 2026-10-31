@@ -91,10 +91,21 @@ namespace AnimLab.KonoSuba
                 (GameInput.GetDown(GameAction.Jump) ? AnimLab.Netcode.Sim.Buttons.Jump : 0) |
                 (GameInput.GetDown(GameAction.Roll) ? AnimLab.Netcode.Sim.Buttons.Roll : 0) |
                 (GameInput.Get(GameAction.Run) ? AnimLab.Netcode.Sim.Buttons.Run : 0);
-            return AnimLab.Netcode.Unity.InputSampling.Quantize(wish, yaw, buttons, lockOn != null && lockOn.Current != null);
+            var input = AnimLab.Netcode.Unity.InputSampling.Quantize(wish, yaw, buttons, lockOn != null && lockOn.Current != null);
+            // Alvo do lock-on como índice do lutador; teclas 1–9 da hotbar; ponto de mira no chão debaixo do rato.
+            int target = lockOn != null && lockOn.Current != null ? AnimLab.Netcode.Unity.NetMatch.FighterIndexOf(lockOn.Current.gameObject) : -1;
+            if (target >= 0) input.TargetSlot = (byte)(target + 1);
+            for (int i = 0; i < 9; i++)
+                if (GameInput.GetDown((GameAction)((int)GameAction.Ability1 + i))) { input.Cast = (byte)(i + 1); break; }
+            Vector3 aim = transform.position + transform.forward * 10f;
+            if (cam != null && new Plane(Vector3.up, Vector3.zero).Raycast(cam.ScreenPointToRay(Input.mousePosition), out float d))
+                aim = cam.ScreenPointToRay(Input.mousePosition).GetPoint(d);
+            input.AimX = (short)Mathf.Clamp(Mathf.RoundToInt(aim.x * 100f), short.MinValue, short.MaxValue);
+            input.AimZ = (short)Mathf.Clamp(Mathf.RoundToInt(aim.z * 100f), short.MinValue, short.MaxValue);
+            return input;
         }
 
-        public void ApplyNetState(AnimLab.Netcode.Sim.PlayerState state, Vector3 position, float yaw)
+        public void ApplyNetState(in AnimLab.Netcode.Sim.PlayerState state, Vector3 position, float yaw)
         {
             transform.SetPositionAndRotation(position, Quaternion.Euler(0f, yaw, 0f));
             velocity = AnimLab.Netcode.Unity.ViewConvert.Vector(state.Velocity);

@@ -10,7 +10,7 @@ namespace AnimLab.KonoSuba
     /// (o Dash é geral, está sempre disponível). A disposição fica guardada em PlayerPrefs; uma habilidade que
     /// deixe de estar aprendida (ex.: mudar de árvores) sai sozinha da hotbar.
     /// </summary>
-    public class AbilityBar : MonoBehaviour
+    public class AbilityBar : MonoBehaviour, AnimLab.Netcode.Unity.INetConfigSource, AnimLab.Netcode.Unity.INetAbilityView
     {
         public GameHud hud;
         public float maxMana = 100f;
@@ -139,6 +139,7 @@ namespace AnimLab.KonoSuba
 
         void Update()
         {
+            if (externalDrive) return;
             if (channels == 0) mana = Mathf.Min(maxMana, mana + manaRegen * Time.deltaTime);
 
             for (int i = 0; i < slots.Length; i++)
@@ -159,6 +160,96 @@ namespace AnimLab.KonoSuba
                 hud.maxMana = maxMana;
                 for (int i = 0; i < slots.Length; i++) hud.SetCooldown(i, slots[i] != null ? slots[i].CooldownRemaining01 : 0f);
             }
+        }
+
+        // ------------------------------------------------------------------ Online (simulação de rede)
+        // Com a partida em rede, a hotbar só mostra: as teclas vão no input, a mana e as recargas vêm do estado,
+        // e os VFX dos lançamentos e dos projéteis seguem os eventos e as posições simuladas.
+
+        bool externalDrive;
+        public bool ExternalDrive { get => externalDrive; set => externalDrive = value; }
+        readonly Dictionary<int, FireBallFlightVisual> netBalls = new Dictionary<int, FireBallFlightVisual>();
+
+        static AnimLab.Netcode.Sim.AbilityId IdOf(Ability a) =>
+            a is DashAbility ? AnimLab.Netcode.Sim.AbilityId.Dash : a is FireBallAbility ? AnimLab.Netcode.Sim.AbilityId.FireBall
+            : a is WaterBallAbility ? AnimLab.Netcode.Sim.AbilityId.WaterBall : a is WindBallAbility ? AnimLab.Netcode.Sim.AbilityId.WindBall
+            : a is LightningAbility ? AnimLab.Netcode.Sim.AbilityId.Lightning : a is ThunderAbility ? AnimLab.Netcode.Sim.AbilityId.Thunder
+            : a is KirinAbility ? AnimLab.Netcode.Sim.AbilityId.Kirin : a is SummonAbility ? AnimLab.Netcode.Sim.AbilityId.Summon
+            : AnimLab.Netcode.Sim.AbilityId.None;
+
+        public void CaptureNetConfig(ref AnimLab.Netcode.Sim.PlayerConfig c)
+        {
+            if (abilities == null) { abilities = GetComponents<Ability>(); stats = GetComponent<CharacterStats>(); Load(); }
+            c.MaxMana = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxMana);
+            c.ManaRegen = AnimLab.Netcode.Unity.ViewConvert.Fixed(manaRegen);
+            for (int i = 0; i < slots.Length && i < 9; i++) c.SetSlot(i, slots[i] != null ? IdOf(slots[i]) : AnimLab.Netcode.Sim.AbilityId.None);
+            if (stats != null)
+            {
+                c.CastSpeed = AnimLab.Netcode.Unity.ViewConvert.Fixed(stats.CastSpeed);
+                c.SpellPower = AnimLab.Netcode.Unity.ViewConvert.Fixed(stats.SpellScale);
+                c.CooldownReduction = AnimLab.Netcode.Unity.ViewConvert.Fixed(stats.CooldownReduction);
+            }
+        }
+
+        public void ApplyNetState(in AnimLab.Netcode.Sim.PlayerState state, float now)
+        {
+            // Só a barra do jogador local escreve no HUD (a cópia remota partilha a referência).
+            var net = AnimLab.Netcode.Unity.NetMatch.Active;
+            if (hud == null || net == null || net.LocalActor != gameObject) return;
+            float cdr = stats != null ? stats.CooldownReduction : 0f;
+            for (int i = 0; i < slots.Length && i < 9; i++)
+            {
+                Ability a = slots[i];
+                float total = a != null ? a.cooldown * (1f - cdr) : 0f;
+                float left = AnimLab.Netcode.Unity.ViewConvert.Number(state.CooldownUntil(i)) - now;
+                hud.SetCooldown(i, total > 0f ? Mathf.Clamp01(left / total) : 0f);
+            }
+        }
+
+        public void PresentNetAbility(AnimLab.Netcode.Sim.SimEvent ev, GameObject other)
+        {
+            Vector3 at = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Point);
+            Vector3 dir = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Direction);
+            switch (ev.Ability)
+            {
+                case AnimLab.Netcode.Sim.AbilityId.Dash:
+                    if (ev.Other == 1) { if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(at, 0.9f); break; }
+                    var dash = GetComponent<DashAbility>();
+                    // O ar empurrado à frente do corpo: rasto no nevoeiro e na água (como DashAbility.Dash).
+                    FogField.Wind(at, dir, (dash != null ? dash.distance : 4.5f) * 1.4f, 1.8f, 0.45f, 3f);
+                    if (WaterRipples.Instance != null) WaterRipples.Instance.Spray(at, 0.5f);
+                    break;
+                case AnimLab.Netcode.Sim.AbilityId.FireBall:
+                    if (ev.Kind == AnimLab.Netcode.Sim.EventKind.Impact)
+                    {
+                        var fire = GetComponent<FireBallAbility>();
+                        Collider body = other != null ? other.GetComponentInChildren<Collider>() : null;
+                        if (fire != null) FireBallEffect.Impact(at, body, transform, fire);
+                    }
+                    if (ev.Kind != AnimLab.Netcode.Sim.EventKind.Cast) ClearProjectile(ev.Target);
+                    break;
+            }
+        }
+
+        public void SyncProjectile(int slot, AnimLab.Netcode.Sim.ProjectileState now, AnimLab.Netcode.Sim.ProjectileState before, float alpha, float dt)
+        {
+            if (now.Kind != AnimLab.Netcode.Sim.AbilityId.FireBall) return;
+            var fire = GetComponent<FireBallAbility>();
+            if (fire == null) return;
+            Vector3 position = Vector3.Lerp(AnimLab.Netcode.Unity.ViewConvert.Vector(before.Position), AnimLab.Netcode.Unity.ViewConvert.Vector(now.Position), alpha);
+            if (!netBalls.TryGetValue(slot, out var visual) || visual == null)
+            {
+                float radius = Mathf.Clamp(fire.visualRadius, 0.9f, 1.1f) * 0.85f;
+                netBalls[slot] = visual = FireBallFlightVisual.Create(position, radius, slot * 7919 + 13, fire.ballMaterial);
+            }
+            float formation = AnimLab.Netcode.Unity.ViewConvert.Number(now.Formation);
+            float f = Mathf.SmoothStep(0f, 1f, AnimLab.Netcode.Unity.ViewConvert.Number(now.Age) / Mathf.Max(0.05f, formation));
+            visual.Tick(dt, position, now.Launched ? AnimLab.Netcode.Unity.ViewConvert.Vector(now.Velocity) : Vector3.zero, f);
+        }
+
+        public void ClearProjectile(int slot)
+        {
+            if (netBalls.TryGetValue(slot, out var visual)) { if (visual != null) visual.Release(); netBalls.Remove(slot); }
         }
 
         AbilityContext BuildContext()

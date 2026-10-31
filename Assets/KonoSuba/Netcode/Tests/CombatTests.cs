@@ -57,7 +57,7 @@ namespace AnimLab.Netcode.Tests
         {
             var s=Pair(); var e=new EventBuffer(); s.P1.Weapon=WeaponState.Idle; s.P0.Weapon=WeaponState.Idle;
             for(int i=0;i<5;i++) World.Step(ref s,default,new PlayerInput { Buttons=i==0?Buttons.Roll:0,LookYaw=512 },e);
-            Assert.IsTrue(s.P1.Invulnerable); s.P0.Struck=false;
+            Assert.IsTrue(s.P1.Invulnerable); s.P0.StruckMask=0;
             World.Strike(ref s,0,FixVec3.Up,e); Assert.AreEqual((Fix)400,s.P1.Health);
         }
         [Test] public void GreatswordGuardBreakerAndArmorMatchRules()
@@ -138,8 +138,8 @@ namespace AnimLab.Netcode.Tests
                 var styleField=type.GetField("style");
                 foreach(Style style in new[] {Style.Knight,Style.Fencer,Style.Reaper,Style.Daggers,Style.Greatsword}) {
                     styleField.SetValue(sword,Enum.ToObject(styleField.FieldType,(int)style));
-                    string name=style==Style.Knight?"combo":style==Style.Fencer?"fencerCombo":style==Style.Reaper?"reaperCombo":style==Style.Daggers?"daggerCombo":"greatswordCombo";
-                    var moves=(Array)type.GetField(name).GetValue(sword);
+                    // Os golpes do SwordWielder vêm do SwordData (fonte única); confirma a conversão para float.
+                    var moves=(Array)type.GetProperty("Moves").GetValue(sword);
                     Assert.AreEqual(SwordData.Count(style),moves.Length);
                     for(int i=0;i<moves.Length;i++) {
                         object original=moves.GetValue(i); var expected=SwordData.Get(style,i);

@@ -3,8 +3,18 @@ using UnityEngine;
 namespace AnimLab.KonoSuba
 {
     /// <summary>Bola de Fogo, tecla 5: condensa no ombro e segue para o alvo ou para o ponto de mira.</summary>
-    public class FireBallAbility : Ability
+    public class FireBallAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource
     {
+        public void CaptureNetAbility(ref AnimLab.Netcode.Sim.AbilityTable t)
+        {
+            t.FireMana = AnimLab.Netcode.Unity.ViewConvert.Fixed(manaCost); t.FireCooldown = AnimLab.Netcode.Unity.ViewConvert.Fixed(cooldown);
+            t.FireFormation = AnimLab.Netcode.Unity.ViewConvert.Fixed(formationTime); t.FireRadius = AnimLab.Netcode.Unity.ViewConvert.Fixed(radius);
+            t.FireSpeed = AnimLab.Netcode.Unity.ViewConvert.Fixed(speed); t.FireGravity = AnimLab.Netcode.Unity.ViewConvert.Fixed(gravity);
+            t.FireRange = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxRange); t.FireDamage = AnimLab.Netcode.Unity.ViewConvert.Fixed(damage);
+            t.FireBlast = AnimLab.Netcode.Unity.ViewConvert.Fixed(blastRadius);
+            t.FireShoulder = new AnimLab.Netcode.Sim.FixVec3(AnimLab.Netcode.Unity.ViewConvert.Fixed(shoulderOffset.x),
+                AnimLab.Netcode.Unity.ViewConvert.Fixed(shoulderOffset.y), AnimLab.Netcode.Unity.ViewConvert.Fixed(shoulderOffset.z));
+        }
         public Material flameMaterial, steamMaterial, ringMaterial, hitMaterial;
         [Tooltip("Fogo estilizado da bola e da explosão (KonoSuba/FireToon).")]
         public Material ballMaterial;

@@ -22,18 +22,27 @@ namespace AnimLab.Netcode.Unity
         public int MenuCloseAfterTicks = -1;
         public LocalControl Controls = LocalControl.Bots;
         public int InputDelay = 2;
+        /// <summary>Junta à partida a IA da cena (duelista e boneco), como lutadores da simulação.</summary>
+        public bool WithAI = true;
+        /// <summary>Os dois jogadores na mesma equipa, contra a IA.</summary>
+        public bool CoOp;
+        /// <summary>Os bots também lançam habilidades (gravações).</summary>
+        public bool BotsCast;
         public int LocalPlayer;
         public bool Ready { get; private set; }
         public GameObject LocalActor => actors[LocalPlayer];
-        public PlayerState LocalState => LocalPlayer == 0 ? State.P0 : State.P1;
+        public PlayerState LocalState { get { var s = State; return MatchState.Player(ref s, LocalPlayer); } }
         public GameObject Actor(int id) => actors[id];
         public int LatencyMs = 120, JitterMs = 20, LossPercent = 2;
         public int ViewPeer;
         public LoopbackMatch Loopback { get; private set; }
         public RollbackPeer DirectPeer;
-        public MatchState? InitialState;
+        public MatchState InitialState;
+        public bool HasInitialState;
         public int TickLimit = int.MaxValue;
         public string ReportPath;
+        public string ConnectionName="Direct UDP";
+        public Action Ended;
         public bool? RestoreBackground;
         bool previousBackground, backgroundCaptured;
         public MatchState State;
@@ -42,11 +51,15 @@ namespace AnimLab.Netcode.Unity
         readonly EventLedger ledger = new EventLedger();
         readonly InputLatch firstInput = new InputLatch(), secondInput = new InputLatch();
         readonly List<Behaviour> disabled = new List<Behaviour>();
-        readonly INetMovementView[] movers = new INetMovementView[2];
-        readonly INetCombatView[] bodies = new INetCombatView[2];
-        readonly INetSwordView[] swords = new INetSwordView[2];
+        readonly INetMovementView[] movers = new INetMovementView[MatchState.Capacity];
+        readonly INetCombatView[] bodies = new INetCombatView[MatchState.Capacity];
+        readonly INetSwordView[] swords = new INetSwordView[MatchState.Capacity];
+        readonly INetAbilityView[] casters = new INetAbilityView[MatchState.Capacity];
+        readonly int[] projectileOwner = new int[MatchState.ProjectileCapacity];
         GameObject remote;
-        readonly GameObject[] actors = new GameObject[2];
+        readonly GameObject[] actors = new GameObject[MatchState.Capacity];
+        readonly List<GameObject> boundAI = new List<GameObject>();
+        readonly List<(Transform t, Vector3 p, Quaternion r)> poses = new List<(Transform, Vector3, Quaternion)>();
         bool stopped;
         readonly List<GameObject> hidden = new List<GameObject>();
         Label diagnostics;
@@ -60,6 +73,8 @@ namespace AnimLab.Netcode.Unity
         public static NetMatch Active { get; private set; }
         public static bool InputBlocked;
         public int EventsPresented { get; private set; }
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetStatics() { Active=null; InputBlocked=false; }
         void Awake() { if (Application.isPlaying) { if (Active != null && Active != this) Active.Stop(); Active = this; } }
         public void SwitchView() { if (Loopback != null) { ViewPeer=1-ViewPeer; statsAt=networkSteps/60f; lastRollbacks=(ViewPeer==0?Loopback.A:Loopback.B).Session.Rollbacks; } }
 
@@ -82,9 +97,18 @@ namespace AnimLab.Netcode.Unity
                 State.P0.Config.Style = FirstStyle; State.P1.Config.Style = SecondStyle;
                 Previous = State;
             }
-            if (InitialState.HasValue)
+            if (!HasInitialState)
             {
-                State = InitialState.Value; Previous = State;
+                State.Abilities = CaptureTable(player);
+                // Gravações com bots lançadores: hotbar com o Dash e a Bola de Fogo, mesmo sem árvores aprendidas.
+                if (BotsCast) for (int i = 0; i < 2; i++) { ref PlayerState b = ref MatchState.Player(ref State, i); b.Config.SetSlot(0, AbilityId.Dash); b.Config.SetSlot(1, AbilityId.FireBall); }
+                State.P0.Team = State.P1.Team = CoOp ? (byte)1 : (byte)0;
+                if (WithAI) foreach (var f in SceneFighters(State.Rng)) MatchState.Add(ref State, f);
+                Previous = State;
+            }
+            if (HasInitialState)
+            {
+                State = InitialState; Previous = State;
                 FirstStyle = State.P0.Config.Style; SecondStyle = State.P1.Config.Style; ViewPeer = LocalPlayer;
             }
             // Os pés do CapsulePlayer vivem fora da hierarquia: a cópia precisa de pés próprios.
@@ -111,6 +135,14 @@ namespace AnimLab.Netcode.Unity
             foreach (var component in remote.GetComponents<MonoBehaviour>())
                 if (component is INetCombatView) component.GetType().GetField("showNameplate")?.SetValue(component,true);
             Bind(player, LocalPlayer); Bind(remote, 1-LocalPlayer);
+            // IA da cena conduzida pela simulação (o host juntou-a ao estado inicial).
+            for (int i = 2; i < State.Count; i++)
+            {
+                var kind = MatchState.Player(ref State, i).Kind;
+                var go = GameObject.Find(kind == FighterKind.Duelist ? "Duelist" : "DummyEnemy");
+                if (go == null || boundAI.Contains(go)) continue;
+                boundAI.Add(go); actors[i] = go; poses.Add((go.transform, go.transform.position, go.transform.rotation)); Bind(go, i);
+            }
             player.SetActive(true); remote.SetActive(true);
             if (UseRollback)
             {
@@ -122,7 +154,7 @@ namespace AnimLab.Netcode.Unity
                 }
                 else
                 {
-                    Loopback = new LoopbackMatch(State,LatencyMs,JitterMs,LossPercent,InputDelay);
+                    Loopback = new LoopbackMatch(State,LatencyMs,JitterMs,LossPercent,InputDelay) { BotsCast = BotsCast };
                     Loopback.A.Session.EventGenerated += ev => Present(ev,0);
                     Loopback.B.Session.EventGenerated += ev => Present(ev,1);
                     Loopback.A.Desynced += _ => Loopback.A.WriteDesync(Path.Combine("Logs","netcode"));
@@ -132,7 +164,7 @@ namespace AnimLab.Netcode.Unity
             foreach (string name in new[] { "Duelist", "DummyEnemy" })
             {
                 var other = GameObject.Find(name);
-                if (other != null)
+                if (other != null && !boundAI.Contains(other))
                 {
                     foreach (var component in other.GetComponents<MonoBehaviour>())
                         if (component is INetMovementView)
@@ -156,11 +188,35 @@ namespace AnimLab.Netcode.Unity
                 document.rootVisualElement.Add(diagnostics);
             }
             foreach (var c in FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None))
-                if (c.gameObject != player && c.gameObject != remote && (c.GetType().Name == "DuelistAI" || c.GetType().Name == "SwordWielder"))
+                if (c.gameObject != player && c.gameObject != remote && !boundAI.Contains(c.gameObject) && (c.GetType().Name == "DuelistAI" || c.GetType().Name == "SwordWielder"))
                     Disable(c);
             Apply(1f);
             Ready = true;
             if (ShowMenuOnStart) { OnlineMenu.Current?.ShowMatchOptions(this); OnlineMenu.Current?.SetOpen(true); }
+        }
+        /// <summary>Lutadores da IA da cena (Duelist, DummyEnemy) com a configuração do Inspector, na equipa 2.</summary>
+        public static PlayerState[] SceneFighters(ulong seed)
+        {
+            var list = new List<PlayerState>();
+            foreach (var (name, kind) in new[] { ("Duelist", FighterKind.Duelist), ("DummyEnemy", FighterKind.Dummy) })
+            {
+                var go = GameObject.Find(name);
+                if (go == null) continue;
+                PlayerConfig c = CaptureConfig(go);
+                if (kind == FighterKind.Dummy) { c.Walk = c.Run = 0; c.Style = Style.Knight; }
+                Vector3 at = go.transform.position;
+                var f = MatchState.CreatePlayer(c, new FixVec3(ViewConvert.Fixed(at.x), Fix.Zero, ViewConvert.Fixed(at.z)),
+                    ViewConvert.Fixed(go.transform.eulerAngles.y * Mathf.Deg2Rad));
+                f.Kind = kind; f.Team = 2;
+                if (kind == FighterKind.Duelist)
+                {
+                    f.Ai = AiState.Duelist(seed * 0x9E3779B97F4A7C15UL + (ulong)list.Count + 1);
+                    foreach (var b in go.GetComponents<MonoBehaviour>()) if (b is INetBrainView brain) brain.CaptureNetBrain(ref f.Ai);
+                    f.Ai.NoiseSeed = Fix.FromInt(list.Count * 37 + 11);
+                }
+                list.Add(f);
+            }
+            return list.ToArray();
         }
         public static PlayerConfig CaptureConfig(GameObject actor)
         {
@@ -170,8 +226,26 @@ namespace AnimLab.Netcode.Unity
                 if (component is INetMovementView m) m.CaptureNetConfig(ref config);
                 else if (component is INetCombatView b) b.CaptureNetConfig(ref config);
                 else if (component is INetSwordView w) w.CaptureNetConfig(ref config);
+                if (component is INetConfigSource source) source.CaptureNetConfig(ref config);
             }
             return config;
+        }
+        /// <summary>Parâmetros das habilidades lidos dos componentes do jogador (a mesma fonte do offline).</summary>
+        public static AbilityTable CaptureTable(GameObject actor)
+        {
+            AbilityTable table = AbilityTable.Default;
+            if (actor != null)
+                foreach (var component in actor.GetComponents<MonoBehaviour>())
+                    if (component is INetAbilitySource source) source.CaptureNetAbility(ref table);
+            return table;
+        }
+        /// <summary>Índice do lutador conduzido por este objeto (-1 se não está na partida).</summary>
+        public static int FighterIndexOf(GameObject go)
+        {
+            var m = Active;
+            if (m == null || go == null) return -1;
+            for (int i = 0; i < m.actors.Length; i++) if (m.actors[i] == go) return i;
+            return -1;
         }
         void Disable(Behaviour b) { if (b.enabled) { disabled.Add(b); b.enabled = false; } }
         void Bind(GameObject go, int id)
@@ -182,6 +256,7 @@ namespace AnimLab.Netcode.Unity
                 if (c is INetMovementView m) { movers[id] = m; m.ExternalDrive = true; }
                 else if (c is INetCombatView b) { bodies[id] = b; b.ExternalDrive = true; }
                 else if (c is INetSwordView w) { swords[id] = w; w.ExternalDrive = true; }
+                else if (c is INetAbilityView a) { casters[id] = a; a.ExternalDrive = true; }
                 else if (c.GetType().Name != "LockOnTarget" && !(id == LocalPlayer && c.GetType().Name == "LockOn")) Disable(c);
             }
         }
@@ -243,6 +318,7 @@ namespace AnimLab.Netcode.Unity
                 accumulator -= 1.0 / 60;
             }
             Apply(Interpolate ? (float)(accumulator * 60) : 1f);
+            ApplyProjectiles(Interpolate ? (float)(accumulator * 60) : 1f);
             if (MenuCloseAfterTicks >= 0 && networkSteps >= MenuCloseAfterTicks)
             {
                 OnlineMenu.Current?.SetOpen(false); MenuCloseAfterTicks = -1;
@@ -263,13 +339,22 @@ namespace AnimLab.Netcode.Unity
         void Present(SimEvent ev,int peer)
         {
             if (peer != ViewPeer || !ledger.Present(ev)) return;
-            bodies[ev.Target]?.PresentNetEvent(ev); EventsPresented++;
+            EventsPresented++;
+            // Lançamentos, impactos e projéteis: a vista de habilidades de quem lançou.
+            if (ev.Kind == EventKind.Cast || ev.Kind == EventKind.Impact || ev.Kind == EventKind.Fizzle)
+            {
+                if (ev.Source >= 0 && ev.Source < casters.Length)
+                    casters[ev.Source]?.PresentNetAbility(ev, ev.Other >= 0 && ev.Other < actors.Length ? actors[ev.Other] : null);
+                return;
+            }
+            bodies[ev.Target]?.PresentNetEvent(ev, bodies[ev.Source] as Component);
         }
         void Apply(float alpha)
         {
-            for (int i = 0; i < 2; i++)
+            var now = State; var before = Previous;
+            for (int i = 0; i < now.Count; i++)
             {
-                PlayerState p = i == 0 ? State.P0 : State.P1, old = i == 0 ? Previous.P0 : Previous.P1;
+                PlayerState p = MatchState.Player(ref now, i), old = i < before.Count ? MatchState.Player(ref before, i) : p;
                 PlayerState visual = p;
                 Fix blend = ViewConvert.Fixed(alpha);
                 if (p.Motion == old.Motion) visual.MotionTime = Fix.Lerp(old.MotionTime,p.MotionTime,blend);
@@ -277,8 +362,26 @@ namespace AnimLab.Netcode.Unity
                 visual.Velocity = FixVec3.Lerp(old.Velocity,p.Velocity,blend);
                 Vector3 position = Vector3.Lerp(ViewConvert.Vector(old.Position), ViewConvert.Vector(p.Position), alpha);
                 float yaw = Mathf.LerpAngle(ViewConvert.Number(old.Yaw) * Mathf.Rad2Deg, ViewConvert.Number(p.Yaw) * Mathf.Rad2Deg, alpha);
-                movers[i]?.ApplyNetState(visual, position, yaw); bodies[i]?.ApplyNetState(p);
+                if (movers[i] != null) movers[i].ApplyNetState(visual, position, yaw);
+                else if (actors[i] != null) actors[i].transform.SetPositionAndRotation(position, Quaternion.Euler(0f, yaw, 0f));
+                bodies[i]?.ApplyNetState(p);
+                casters[i]?.ApplyNetState(p, ViewConvert.Number(Fix.FromInt(now.Tick) * World.Dt));
                 swords[i]?.ApplyNetState(visual);
+            }
+        }
+        // Projéteis: cada posição do estado é desenhada pela vista de quem a lançou (refeita se um rollback a muda).
+        void ApplyProjectiles(float alpha)
+        {
+            var now = State; var before = Previous;
+            for (int i = 0; i < MatchState.ProjectileCapacity; i++)
+            {
+                ProjectileState b = MatchState.Projectile(ref now, i), old = MatchState.Projectile(ref before, i);
+                int owner = b.Kind == AbilityId.None ? -1 : b.Owner;
+                if (projectileOwner[i] != owner + 1 && projectileOwner[i] > 0) casters[projectileOwner[i] - 1]?.ClearProjectile(i);
+                projectileOwner[i] = owner + 1;
+                if (owner < 0) continue;
+                if (old.Kind != b.Kind || old.Owner != b.Owner) old = b;
+                casters[owner]?.SyncProjectile(i, b, old, alpha, Time.unscaledDeltaTime);
             }
         }
         void OnDestroy()
@@ -306,6 +409,7 @@ namespace AnimLab.Netcode.Unity
                 }
             Time.timeScale = 1f;
             if (DirectPeer != null) { WriteReport(); DirectPeer.Dispose(); }
+            var ended=Ended; Ended=null; ended?.Invoke();
             if (Loopback != null)
             {
                 Directory.CreateDirectory("Logs/netcode");
@@ -313,7 +417,10 @@ namespace AnimLab.Netcode.Unity
                 File.WriteAllText("Logs/netcode/capture_summary.txt",$"wall_seconds={networkSteps/60f:F2}; ticks={a.Session.State.Tick}/{b.Session.State.Tick}; rollbacks={a.Session.Rollbacks}/{b.Session.Rollbacks}; resimulated={a.Session.RolledBackTicks}/{b.Session.RolledBackTicks}; max_depth={a.Session.MaximumRollback}/{b.Session.MaximumRollback}; verified={a.ChecksumsVerified}/{b.ChecksumsVerified}; dropped={Loopback.Network.Dropped}; desync={(a.Desync == null && b.Desync == null ? 0 : 1)}");
                 Loopback.Dispose();
             }
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < MatchState.ProjectileCapacity; i++)
+                if (projectileOwner[i] > 0) { casters[projectileOwner[i] - 1]?.ClearProjectile(i); projectileOwner[i] = 0; }
+            for (int i = 0; i < MatchState.Capacity; i++) {
+                if ((casters[i] as UnityEngine.Object) != null) casters[i].ExternalDrive = false;
                 if ((movers[i] as UnityEngine.Object) != null) movers[i].ExternalDrive = false;
                 if ((bodies[i] as UnityEngine.Object) != null) bodies[i].ExternalDrive = false;
                 if ((swords[i] as UnityEngine.Object) != null) swords[i].ExternalDrive = false;
@@ -321,6 +428,7 @@ namespace AnimLab.Netcode.Unity
             foreach (var b in disabled) if (b != null && (remote == null || b.gameObject != remote)) b.enabled = true;
             foreach (var cc in controllers) if (cc != null && (remote == null || cc.gameObject != remote)) cc.enabled = true;
             if (remote != null) Destroy(remote);
+            foreach (var (t, p, r) in poses) if (t != null) t.SetPositionAndRotation(p, r);
             foreach (var go in hidden) if (go != null) go.SetActive(true);
             diagnostics?.RemoveFromHierarchy();
             if (Active == this) Active = null;
@@ -368,6 +476,7 @@ namespace AnimLab.Netcode.Unity
             match.CaptureSceneConfig = true;
             match.ShowMenuOnStart = true;
             match.MenuCloseAfterTicks = 150;
+            match.BotsCast = OnlineConnection.Arg("-netCast", "0") == "1";
         }
     }
 }

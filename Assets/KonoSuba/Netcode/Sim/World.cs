@@ -1,34 +1,74 @@
 namespace AnimLab.Netcode.Sim
 {
-    /// <summary>Simulação a 60 Hz. Ordem fixa: movimento 0/1, armas 0/1, contactos 0/1.</summary>
+    /// <summary>Simulação a 60 Hz. Ordem fixa por índice: movimento, armas, contactos.</summary>
     public static partial class World
     {
         public static readonly Fix Dt = Fix.Ratio(1, 60), ArenaRadius = 20;
         static Fix F(long n, long d = 100) => Fix.Ratio(n, d);
+        [System.ThreadStatic] static PlayerInput[] pair;
+
+        /// <summary>Atalho 1v1: inputs dos lutadores 0 e 1.</summary>
         public static void Step(ref MatchState state, PlayerInput a, PlayerInput b, EventBuffer events)
         {
+            pair ??= new PlayerInput[2];
+            pair[0] = a; pair[1] = b;
+            Step(ref state, pair, events);
+        }
+        /// <summary>inputs[i] é o input do lutador i; os que faltam ficam neutros.</summary>
+        public static void Step(ref MatchState state, PlayerInput[] inputs, EventBuffer events)
+        {
             events.Clear();
-            bool freeze0 = state.P0.HitStop > 0, freeze1 = state.P1.HitStop > 0;
+            int count = state.Count, frozen = 0;
             // O impacto não perde pedidos de combo/salto/roll feitos durante a paragem.
             const Buttons edges = Buttons.Attack | Buttons.Jump | Buttons.Roll;
-            if (freeze0) state.P0.BufferedEdges |= a.Buttons & edges;
-            else { a.Buttons |= state.P0.BufferedEdges; state.P0.BufferedEdges = 0; }
-            if (freeze1) state.P1.BufferedEdges |= b.Buttons & edges;
-            else { b.Buttons |= state.P1.BufferedEdges; state.P1.BufferedEdges = 0; }
-            if (freeze0) state.P0.HitStop--;
-            if (freeze1) state.P1.HitStop--;
-            if (!freeze0) { state.P0.BodyTime += Dt; Move(ref state, 0, a, events); }
-            if (!freeze1) { state.P1.BodyTime += Dt; Move(ref state, 1, b, events); }
-            Separate(ref state, freeze0, freeze1);
-            AfterMovement(ref state, a, b, freeze0, freeze1, events);
+            var input = scratch ??= new PlayerInput[MatchState.Capacity];
+            for (int i = 0; i < count; i++)
+            {
+                ref PlayerState p = ref MatchState.Player(ref state, i);
+                // A IA decide aqui, a partir do estado no início do tick; os bonecos ficam parados.
+                PlayerInput x = p.Kind == FighterKind.Duelist ? DuelistBrain.Think(ref state, i, events)
+                    : p.Kind == FighterKind.Dummy ? default : inputs != null && i < inputs.Length ? inputs[i] : default;
+                if (p.HitStop > 0) { frozen |= 1 << i; p.BufferedEdges |= x.Buttons & edges; }
+                else { x.Buttons |= p.BufferedEdges; p.BufferedEdges = 0; }
+                input[i] = x;
+            }
+            for (int i = 0; i < count; i++) if ((frozen & 1 << i) != 0) MatchState.Player(ref state, i).HitStop--;
+            for (int i = 0; i < count; i++)
+                if ((frozen & 1 << i) == 0) { MatchState.Player(ref state, i).BodyTime += Dt; Move(ref state, i, input[i], events); }
+            Separate(ref state, frozen);
+            AfterMovement(ref state, input, frozen, events);
+            for (int i = 0; i < count; i++) if ((frozen & 1 << i) == 0) TickAbility(ref state, i, input[i], events);
+            // A paragem de impacto é global (como o timeScale do offline): os projéteis também param.
+            if (frozen != (1 << count) - 1) TickProjectiles(ref state, events);
             state.Tick++;
         }
-        static partial void AfterMovement(ref MatchState s, PlayerInput a, PlayerInput b, bool freeze0, bool freeze1, EventBuffer events);
+        [System.ThreadStatic] static PlayerInput[] scratch;
+        static partial void AfterMovement(ref MatchState s, PlayerInput[] input, int frozen, EventBuffer events);
+
+        /// <summary>Alvo do lutador: o escolhido no input (se hostil e vivo) ou o hostil vivo mais próximo; -1 se não há.</summary>
+        public static int TargetOf(ref MatchState s, int id, PlayerInput input)
+        {
+            int chosen = input.TargetSlot - 1;
+            if (chosen >= 0 && MatchState.Hostile(ref s, id, chosen) && MatchState.Player(ref s, chosen).Health > 0) return chosen;
+            FixVec3 from = MatchState.Player(ref s, id).Position;
+            int best = -1; Fix bestDistance = 0;
+            for (int j = 0; j < s.Count; j++)
+            {
+                if (!MatchState.Hostile(ref s, id, j)) continue;
+                ref PlayerState q = ref MatchState.Player(ref s, j);
+                if (q.Health <= 0) continue;
+                Fix d = (q.Position - from).Flat.LengthSquared;
+                if (best < 0 || d < bestDistance) { best = j; bestDistance = d; }
+            }
+            return best;
+        }
 
         static void Move(ref MatchState s, int id, PlayerInput input, EventBuffer events)
         {
+            int targetId = TargetOf(ref s, id, input);
+            bool hasTarget = targetId >= 0;
+            FixVec3 target = hasTarget ? MatchState.Player(ref s, targetId).Position : FixVec3.Zero;
             ref PlayerState p = ref MatchState.Player(ref s, id);
-            FixVec3 target = MatchState.Player(ref s, 1 - id).Position;
             FixVec3 wish = input.Wish;
             bool attack = p.Attacking, recoil = p.Weapon == WeaponState.Recoil, guard = p.Weapon == WeaponState.Guard;
             bool swinging = p.Weapon == WeaponState.Windup || p.Weapon == WeaponState.Active;
@@ -58,8 +98,8 @@ namespace AnimLab.Netcode.Sim
             {
                 p.Motion = Motion.Plunge; p.MotionTime = 0; p.LongJump = false; p.Dived = false;
                 FixVec3 d = (target - p.Position).Flat;
-                p.HasPlungeTarget = input.Targeted || d.Length < 4 && FixVec3.Dot(p.Forward, d.Normalized) > Fix.Cos(Fix.Degrees(80));
-                p.Weapon = WeaponState.Plunge; p.PlungePhase = 0; p.WeaponTime = 0; p.Queued = false; p.Struck = false; p.HasLastBlade = false;
+                p.HasPlungeTarget = hasTarget && (input.Targeted || d.Length < 4 && FixVec3.Dot(p.Forward, d.Normalized) > Fix.Cos(Fix.Degrees(80)));
+                p.Weapon = WeaponState.Plunge; p.PlungePhase = 0; p.WeaponTime = 0; p.Queued = false; p.StruckMask = 0; p.HasLastBlade = false;
             }
             Fix max = (input.Has(Buttons.Run) && !guard ? p.Config.Run : p.Config.Walk) * p.Config.SpeedScale;
             p.MotionTime += Dt;
@@ -89,7 +129,7 @@ namespace AnimLab.Netcode.Sim
                         if (!p.Dived) { p.Dived = true; p.PlungePhase = 1; p.HasLastBlade = false; }
                         p.VerticalVelocity = -p.Config.PlungeSpeed; p.Velocity = FixVec3.Zero;
                         FixVec3 d = (target - p.Position).Flat;
-                        if (p.HasPlungeTarget && d.Length <= 6)
+                        if (p.HasPlungeTarget && hasTarget && d.Length <= 6)
                         {
                             FixVec3 aim = d - (d.LengthSquared > F(1,10000) ? d.Normalized * F(55) : FixVec3.Zero);
                             p.Velocity = FixVec3.ClampMagnitude(aim / Fix.Max(F(5), p.Position.Y / p.Config.PlungeSpeed), p.Config.PlungeHoming);
@@ -105,7 +145,7 @@ namespace AnimLab.Netcode.Sim
             }
             Fix yaw = input.Yaw;
             if (p.Motion == Motion.Roll) yaw = Fix.Atan2(p.RollDirection.X, p.RollDirection.Z);
-            else if (p.Motion == Motion.Plunge && p.HasPlungeTarget && (target - p.Position).Flat.LengthSquared > F(1))
+            else if (p.Motion == Motion.Plunge && p.HasPlungeTarget && hasTarget && (target - p.Position).Flat.LengthSquared > F(1))
                 yaw = Fix.Atan2(target.X - p.Position.X, target.Z - p.Position.Z);
             if (!p.Staggered && !recoil && (!attack || p.Motion == Motion.Plunge))
                 p.Yaw += Fix.Clamp(Fix.DeltaAngle(p.Yaw, yaw), -p.Config.Turn * Dt, p.Config.Turn * Dt);
@@ -124,10 +164,12 @@ namespace AnimLab.Netcode.Sim
                         p.LandLagUntil = p.BodyTime + p.Config.PlungeRecovery; p.PlungePhase = 2; p.WeaponTime = 0; p.StuckFor = p.Config.PlungeRecovery - F(8);
                         PlungeImpact(ref s, id, events);
                     }
-                    events.Add(s.Tick, plunge ? EventKind.Plunge : EventKind.Land, id, id, p.Position + (plunge ? p.Forward * F(50) : FixVec3.Zero), FixVec3.Up,visualStop:plunge?F(9):Fix.Zero);
+                    ref PlayerState q = ref MatchState.Player(ref s, id);
+                    events.Add(s.Tick, plunge ? EventKind.Plunge : EventKind.Land, id, id, q.Position + (plunge ? q.Forward * F(50) : FixVec3.Zero), FixVec3.Up,visualStop:plunge?F(9):Fix.Zero);
                 }
             }
-            Bounds(ref p);
+            Bounds(ref MatchState.Player(ref s, id));
+            TickDash(ref s, id, events);
         }
         static partial void PlungeImpact(ref MatchState s, int id, EventBuffer events);
 
@@ -140,9 +182,15 @@ namespace AnimLab.Netcode.Sim
                 p.Position.X = flat.X; p.Position.Z = flat.Z;
             }
         }
-        static void Separate(ref MatchState s, bool freeze0, bool freeze1)
+        /// <summary>Empurra para fora as cápsulas sobrepostas, par a par por ordem de índice.</summary>
+        static void Separate(ref MatchState s, int frozen)
         {
-            ref PlayerState a = ref s.P0; ref PlayerState b = ref s.P1;
+            for (int i = 0; i < s.Count; i++)
+                for (int j = i + 1; j < s.Count; j++)
+                    SeparatePair(ref MatchState.Player(ref s, i), ref MatchState.Player(ref s, j), (frozen & 1 << i) != 0, (frozen & 1 << j) != 0);
+        }
+        static void SeparatePair(ref PlayerState a, ref PlayerState b, bool freeze0, bool freeze1)
+        {
             Fix halfA = Fix.Max(0,a.Config.Height/2-a.Config.Radius), halfB = Fix.Max(0,b.Config.Height/2-b.Config.Radius);
             Fix centerA = a.Position.Y+a.Config.CenterY, centerB = b.Position.Y+b.Config.CenterY;
             Fix gap = Fix.Max(0,Fix.Abs(centerB-centerA)-halfA-halfB), radii = a.Config.Radius+b.Config.Radius;
@@ -157,4 +205,3 @@ namespace AnimLab.Netcode.Sim
         }
     }
 }
-
