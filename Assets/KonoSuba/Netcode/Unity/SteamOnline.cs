@@ -37,6 +37,13 @@ namespace AnimLab.Netcode.Unity
             instance.options=options; instance.options.Controls=LocalControl.HumanVsBot;
             Client.Join(lobby);
         }
+        public static void JoinCode(ulong lobby,OnlineOptions options)
+        {
+            if(!Ensure()) return;
+            OnlineConnection.Cancel(); NetMatch.Active?.Stop(); Client.Leave();
+            instance.options=options; instance.options.Controls=LocalControl.HumanVsBot;
+            Client.JoinCode(lobby);
+        }
         public static void Refresh() { if(Ensure()) Client.Refresh(NetworkClock.Now); }
         public static void Leave() { Client?.Leave(); }
         void OnLobbyReady(bool host,ulong owner)

@@ -71,8 +71,6 @@ namespace AnimLab.Netcode.Steam
         {
             if(disposed || Searching) return;
             SteamMatchmaking.AddRequestLobbyListStringFilter(SteamLobbyInfo.GameKey,SteamLobbyInfo.Game,ELobbyComparison.k_ELobbyComparisonEqual);
-            SteamMatchmaking.AddRequestLobbyListStringFilter(SteamLobbyInfo.ProtocolKey,SteamLobbyInfo.Protocol,ELobbyComparison.k_ELobbyComparisonEqual);
-            SteamMatchmaking.AddRequestLobbyListStringFilter(SteamLobbyInfo.BuildKey,SteamLobbyInfo.Build,ELobbyComparison.k_ELobbyComparisonEqual);
             SteamMatchmaking.AddRequestLobbyListDistanceFilter(ELobbyDistanceFilter.k_ELobbyDistanceFilterWorldwide);
             SteamMatchmaking.AddRequestLobbyListResultCountFilter(50);
             Searching=true; lastSearch=nowMs; SearchStatus="Refreshing...";
@@ -93,6 +91,13 @@ namespace AnimLab.Netcode.Steam
             joining=true; cancelOperation=false; joiningId=id; expectedOwner=lobby.Owner; Status="Joining Steam lobby...";
             entered.Set(SteamMatchmaking.JoinLobby(new CSteamID(id)));
         }
+        /// <summary>Entra num lobby pelo código (o ID que o host vê), sem depender da lista.</summary>
+        public void JoinCode(ulong id)
+        {
+            if(disposed || Busy || LobbyId!=0 || id==0) return;
+            joining=true; cancelOperation=false; joiningId=id; expectedOwner=0; Status="Joining Steam lobby by code...";
+            entered.Set(SteamMatchmaking.JoinLobby(new CSteamID(id)));
+        }
         void OnCreated(LobbyCreated_t value,bool failure)
         {
             creating=false;
@@ -109,13 +114,14 @@ namespace AnimLab.Netcode.Steam
             ok&=SteamMatchmaking.SetLobbyData(id,"state","Waiting");
             ok&=SteamMatchmaking.SetLobbyJoinable(id,true);
             if(!ok) { Leave(); Status="Could not publish Steam lobby"; return; }
-            Status="Hosting · waiting for peer"; LobbyReady?.Invoke(true,expectedOwner); Refresh(lastSearch+4000);
+            Status="Hosting · waiting for peer · Code "+LobbyId; LobbyReady?.Invoke(true,expectedOwner); Refresh(lastSearch+4000);
         }
         void OnEntered(LobbyEnter_t value,bool failure)
         {
             joining=false; ulong id=value.m_ulSteamIDLobby;
             if(failure || value.m_EChatRoomEnterResponse!=(uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) { Status="Could not join Steam lobby"; return; }
             var lobby=Read(id);
+            if(expectedOwner==0 && lobby!=null) expectedOwner=lobby.Owner;
             if(cancelOperation || id!=joiningId || lobby==null || lobby.Owner!=expectedOwner || lobby.Members!=2) {
                 SteamMatchmaking.LeaveLobby(new CSteamID(id)); Status="Lobby is no longer compatible or available"; return;
             }
@@ -132,13 +138,17 @@ namespace AnimLab.Netcode.Steam
         {
             Searching=false; SearchRevision++; lobbies.Clear(); LastSearchContainsOwn=false; LastRawResultCount=(int)value.m_nLobbiesMatching;
             if(failure) { SearchStatus="Could not refresh Steam lobbies"; return; }
+            int otherVersion=0;
             for(int i=0;i<value.m_nLobbiesMatching;i++) {
                 var id=SteamMatchmaking.GetLobbyByIndex(i); var lobby=Read(id.m_SteamID);
                 if(lobby!=null) { lobbies.Add(lobby); if(lobby.Id==LobbyId) LastSearchContainsOwn=true; }
+                else if(SteamMatchmaking.GetLobbyData(id,SteamLobbyInfo.ProtocolKey)!=SteamLobbyInfo.Protocol
+                    || SteamMatchmaking.GetLobbyData(id,SteamLobbyInfo.BuildKey)!=SteamLobbyInfo.Build) otherVersion++;
             }
             // A Steam omite lobbies cheios; o nosso continua visível enquanto jogamos.
             if(LobbyId!=0 && !lobbies.Exists(l=>l.Id==LobbyId)) { var own=Read(LobbyId); if(own!=null) lobbies.Insert(0,own); }
-            SearchStatus=lobbies.Count==0?"No compatible lobbies. Ask a friend to Host.":"Updates every 4 seconds";
+            SearchStatus=(lobbies.Count==0?"No compatible lobbies. Ask a friend to Host.":"Updates every 4 seconds")
+                +$" · Steam found {value.m_nLobbiesMatching}"+(otherVersion>0?$", {otherVersion} on another version (git pull)":"");
         }
         public bool IsLobbyPeer(ulong peer)
         {

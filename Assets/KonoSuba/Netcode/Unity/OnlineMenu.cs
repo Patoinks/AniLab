@@ -34,6 +34,7 @@ namespace AnimLab.Netcode.Unity
         readonly TextField endpoint;
         readonly DropdownField latency,controls,firstStyle,secondStyle;
         readonly Toggle interpolation,withAI,coop;
+        readonly TextField lobbyCode;
         int closedAt=-10;
         bool open;
         string message="Offline";
@@ -83,6 +84,13 @@ namespace AnimLab.Netcode.Unity
             steamStatus.style.color=Dim; steamStatus.style.whiteSpace=WhiteSpace.Normal; window.Add(steamStatus);
             var list=new ScrollView { name="OnlineSteamList" }; list.style.height=135; list.style.marginTop=8;
             steamRows=list.contentContainer; window.Add(list);
+            // Código do lobby: o host copia-o (Copy code) e o amigo cola-o aqui, sem depender da lista.
+            var codeRow=Row();
+            lobbyCode=new TextField("Lobby code") { value="",name="OnlineLobbyCode" }; lobbyCode.style.flexGrow=1;
+            codeRow.Add(lobbyCode);
+            codeRow.Add(new Button(()=> { if(ulong.TryParse(lobbyCode.value.Trim(),out ulong id)) SteamOnline.JoinCode(id,Options); else ShowMessage("Paste the host's lobby code",true); }) { text="Join code" });
+            codeRow.Add(new Button(()=> { var c=SteamOnline.Client; if(c!=null && c.LobbyId!=0) { GUIUtility.systemCopyBuffer=c.LobbyId.ToString(); ShowMessage("Lobby code copied",true); } }) { text="Copy code" });
+            window.Add(codeRow);
             var directOptions=new Foldout { text="Direct IP (UDP)",value=false }; window.Add(directOptions);
             directOptions.name="OnlineDirectOptions";
             var direct=Row();
