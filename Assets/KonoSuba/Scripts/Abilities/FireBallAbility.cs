@@ -19,6 +19,19 @@ namespace AnimLab.KonoSuba
         public float maxRange = 36f;
         [Tooltip("Volume evaporado no impacto junto à água (m³). Não aplica Burning.")]
         public float evaporatedVolume = 0.12f;
+        [Header("Dano")]
+        public int minDamage = 110;
+        public int maxDamage = 140;
+        [Range(0f, 1f)] public float critChance = 0.2f;
+        [Min(1f)] public float critMultiplier = 1.8f;
+
+        /// <summary>Dano de um impacto (aleatório entre min e max; crítico multiplica).</summary>
+        public int RollDamage(out bool crit)
+        {
+            crit = Random.value < critChance;
+            float dmg = Random.Range(minDamage, maxDamage + 1);
+            return Mathf.RoundToInt(crit ? dmg * critMultiplier : dmg);
+        }
 
         void Reset()
         {

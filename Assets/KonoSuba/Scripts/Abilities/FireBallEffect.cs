@@ -70,7 +70,12 @@ namespace AnimLab.KonoSuba
                         offset = new Vector3(Random.Range(-1.2f, 1.2f), 0f, Random.Range(-1.2f, 1.2f)),
                         delay = 0.3f + i * 0.15f, size = Random.Range(2.6f, 3.6f), seed = Random.value * 100f
                     });
-            if (target != null) e.AddAfterglow(target);
+            if (target != null)
+            {
+                e.AddAfterglow(target);
+                int dmg = ability.RollDamage(out bool crit);
+                DamageNumbers.Show(target.AimPoint + Vector3.up * 1.1f, dmg, crit, ability.element);
+            }
             e.DrawImpact();
         }
 

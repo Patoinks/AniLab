@@ -14,7 +14,7 @@ namespace AnimLab.KonoSuba
     {
         [Range(0.25f, 1f)] public float resolutionScale = 1f;
         public float clipPlaneOffset = 0.02f;
-        [Tooltip("Layers que aparecem no reflexo (o próprio chão é sempre excluído).")]
+        [Tooltip("Layers que aparecem no reflexo (o próprio chão e a layer UI são sempre excluídos).")]
         public LayerMask reflectLayers = ~0;
 
         static readonly int ReflectionTexId = Shader.PropertyToID("_ReflectionTex");
@@ -46,7 +46,8 @@ namespace AnimLab.KonoSuba
             rc.CopyFrom(cam);
             rc.cameraType = CameraType.Reflection;
             rc.depthTextureMode = DepthTextureMode.Depth; // soft particles do nevoeiro também no reflexo
-            rc.cullingMask = reflectLayers & ~(1 << gameObject.layer);
+            // UI: números de dano e afins no mundo, que não devem aparecer espelhados no chão.
+            rc.cullingMask = reflectLayers & ~(1 << gameObject.layer) & ~LayerMask.GetMask("UI");
             rc.targetTexture = reflectionTexture;
             rc.worldToCameraMatrix = cam.worldToCameraMatrix * reflection;
             rc.transform.position = reflection.MultiplyPoint(cam.transform.position);
