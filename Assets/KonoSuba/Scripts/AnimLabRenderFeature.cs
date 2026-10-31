@@ -18,6 +18,8 @@ namespace AnimLab.KonoSuba
     ///     opaco resolvido antes por pixel (passe FireDepth).
     ///   - Fogo, composição (depois do pós-processamento): pirâmide de bloom do fogo e junção ao ecrã depois do
     ///     grading — as cores do fogo saem como estão nos materiais (pintadas em sRGB).
+    ///   - Sobreposição (por último): materiais com o passe "AnimLabOverlay" (números de dano) desenhados por cima
+    ///     da imagem final, sem tonemap nem grading, como o HUD.
     /// Câmaras de reflexo e de pré-visualização ficam de fora.
     /// </summary>
     public class AnimLabRenderFeature : ScriptableRendererFeature
@@ -27,6 +29,7 @@ namespace AnimLab.KonoSuba
         TonemapPass tonemap;
         FireDrawPass fireDraw;
         FireCompositePass fireComposite;
+        OverlayPass overlay;
 
         public override void Create()
         {
@@ -35,6 +38,7 @@ namespace AnimLab.KonoSuba
             distortion = new DistortionPass { renderPassEvent = RenderPassEvent.AfterRenderingTransparents };
             tonemap = new TonemapPass { renderPassEvent = RenderPassEvent.AfterRenderingPostProcessing };
             fireComposite = new FireCompositePass { renderPassEvent = RenderPassEvent.AfterRenderingPostProcessing };
+            overlay = new OverlayPass { renderPassEvent = RenderPassEvent.AfterRenderingPostProcessing };
         }
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
@@ -53,6 +57,7 @@ namespace AnimLab.KonoSuba
             renderer.EnqueuePass(distortion);
             renderer.EnqueuePass(tonemap); // antes da composição do fogo: o fogo junta-se já com a cor final
             renderer.EnqueuePass(fireComposite);
+            renderer.EnqueuePass(overlay); // por último: por cima do fogo e já sem grading
         }
 
         protected override void Dispose(bool disposing)
@@ -215,6 +220,33 @@ namespace AnimLab.KonoSuba
                 builder.SetRenderAttachment(color, 0);
                 builder.SetRenderFunc((ApplyData d, RasterGraphContext ctx) =>
                     Blitter.BlitTexture(ctx.cmd, d.source, new Vector4(1, 1, 0, 0), d.material, 0));
+            }
+        }
+    }
+
+    class OverlayPass : ScriptableRenderPass
+    {
+        static readonly ShaderTagId Tag = new ShaderTagId("AnimLabOverlay");
+
+        public OverlayPass() { requiresIntermediateTexture = true; }
+
+        class PassData { public RendererListHandle list; }
+
+        public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
+        {
+            var resources = frameData.Get<UniversalResourceData>();
+            var renderingData = frameData.Get<UniversalRenderingData>();
+            var cameraData = frameData.Get<UniversalCameraData>();
+            var lightData = frameData.Get<UniversalLightData>();
+            DrawingSettings drawing = CreateDrawingSettings(Tag, renderingData, cameraData, lightData, SortingCriteria.CommonTransparent);
+            var filtering = new FilteringSettings(RenderQueueRange.all);
+            RendererListHandle list = renderGraph.CreateRendererList(new RendererListParams(renderingData.cullResults, drawing, filtering));
+            using (var builder = renderGraph.AddRasterRenderPass<PassData>("Sobreposição AnimLab", out var data))
+            {
+                data.list = list;
+                builder.UseRendererList(list);
+                builder.SetRenderAttachment(resources.activeColorTexture, 0);
+                builder.SetRenderFunc((PassData d, RasterGraphContext ctx) => ctx.cmd.DrawRendererList(d.list));
             }
         }
     }
