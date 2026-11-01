@@ -9,25 +9,57 @@ namespace AnimLab.Netcode.Sim
             Damage = damage; Stagger = stagger; Push = Fix.Ratio(push,100); Lift = Fix.Ratio(lift,100);
             Lunge = Fix.Ratio(lunge,100); HitStop = Fix.Ratio(stop,100);
         }
+        SwingData(Fix windup, Fix active, Fix recovery, Fix damage, Fix stagger, Fix push, Fix lift, Fix lunge, Fix stop)
+        {
+            Windup = windup; Active = active; Recovery = recovery; Damage = damage; Stagger = stagger;
+            Push = push; Lift = lift; Lunge = lunge; HitStop = stop;
+        }
+        /// <summary>Golpe de uma arma: o golpe base da Espada × (tempo, dano) da arma × a lentidão global.</summary>
+        internal static SwingData Weapon(SwingData baseMove, Fix time, Fix damage, int push, int lift, int lunge, int stop)
+        {
+            Fix t = time * SwordData.Slowdown;
+            return new SwingData(baseMove.Windup * t, baseMove.Active * t, baseMove.Recovery * t, baseMove.Damage * damage,
+                baseMove.Stagger * damage, Fix.Ratio(push,100), Fix.Ratio(lift,100), Fix.Ratio(lunge,100), Fix.Ratio(stop,100));
+        }
     }
+    /// <summary>
+    /// Regras de combate (fonte única do offline e do online):
+    ///   · A Espada (Knight) é a referência: dois golpes leves e um pesado.
+    ///   · Cada arma = golpes da Espada × (tempo, dano). Mais lenta = mais dano, mas mais fácil de aparar.
+    ///   · Tudo é <see cref="Slowdown"/> mais lento do que era (para dar mais tempo a ver e a aparar).
+    /// O empurrão, o salto, o avanço do corpo e o hit-stop continuam próprios de cada arma (dão o carácter).
+    /// </summary>
     public static class SwordData
     {
+        /// <summary>Todos os golpes 30% mais lentos (tempo × 1,3).</summary>
+        public static readonly Fix Slowdown = Fix.Ratio(13,10);
+        /// <summary>(tempo, dano) de cada arma em relação à Espada.</summary>
+        public static Fix TimeRatio(Style s) => s == Style.Greatsword ? Fix.Ratio(12,10) : s == Style.Reaper ? Fix.Ratio(11,10)
+            : s == Style.Fencer ? Fix.Ratio(8,10) : s == Style.Daggers ? Fix.Ratio(6,10) : Fix.One;
+        public static Fix DamageRatio(Style s) => s == Style.Greatsword ? 2 : s == Style.Reaper ? Fix.Ratio(15,10)
+            : s == Style.Fencer ? Fix.Ratio(75,100) : s == Style.Daggers ? Fix.Ratio(5,10) : Fix.One;
+
+        // Golpes base da Espada (tempos em centésimos de segundo, antes da lentidão global).
+        static readonly SwingData Light1 = new SwingData(12,13,30,18,30,0,0,0,0), Light2 = new SwingData(12,13,30,20,35,0,0,0,0),
+            Heavy = new SwingData(18,14,42,34,70,0,0,0,0);
+        static SwingData W(Style s, SwingData b, int push, int lift, int lunge, int stop) =>
+            SwingData.Weapon(b, TimeRatio(s), DamageRatio(s), push, lift, lunge, stop);
+
         static readonly SwingData[] knight = {
-            new SwingData(12,13,30,18,30,220,0,30,6), new SwingData(12,13,30,20,35,260,0,30,6),
-            new SwingData(18,14,42,34,70,700,300,55,11) };
+            W(Style.Knight,Light1,220,0,30,6), W(Style.Knight,Light2,260,0,30,6), W(Style.Knight,Heavy,700,300,55,11) };
+        // Estocada, estocada baixa e Lunge.
         static readonly SwingData[] fencer = {
-            new SwingData(8,10,22,13,18,120,0,45,4), new SwingData(8,10,24,13,18,120,0,45,4),
-            new SwingData(16,16,36,28,45,350,0,240,9) };
+            W(Style.Fencer,Light1,120,0,45,4), W(Style.Fencer,Light2,120,0,45,4), W(Style.Fencer,Heavy,350,0,240,9) };
+        // Reap, Reverse Reap e Harvest: push negativo = puxa o alvo.
         static readonly SwingData[] reaper = {
-            new SwingData(20,20,32,22,30,-350,0,20,6), new SwingData(18,20,34,22,30,-350,0,20,6),
-            new SwingData(28,32,45,32,55,-500,0,10,10) };
+            W(Style.Reaper,Light1,-350,0,20,6), W(Style.Reaper,Light2,-350,0,20,6), W(Style.Reaper,Heavy,-500,0,10,10) };
+        // Quatro cortes alternados e a estocada dupla.
         static readonly SwingData[] daggers = {
-            new SwingData(6,8,16,9,14,80,0,35,3), new SwingData(6,8,16,9,14,80,0,35,3),
-            new SwingData(6,8,16,9,14,80,0,35,3), new SwingData(6,8,16,9,14,80,0,35,3),
-            new SwingData(12,12,30,20,35,250,0,60,7) };
+            W(Style.Daggers,Light1,80,0,35,3), W(Style.Daggers,Light2,80,0,35,3),
+            W(Style.Daggers,Light1,80,0,35,3), W(Style.Daggers,Light2,80,0,35,3), W(Style.Daggers,Heavy,250,0,60,7) };
+        // Cleave, Sweep e Guard Breaker.
         static readonly SwingData[] greatsword = {
-            new SwingData(32,20,45,38,60,400,0,35,10), new SwingData(28,22,50,38,60,500,0,30,10),
-            new SwingData(42,18,60,55,100,700,250,45,14) };
+            W(Style.Greatsword,Light1,400,0,35,10), W(Style.Greatsword,Light2,500,0,30,10), W(Style.Greatsword,Heavy,700,250,45,14) };
         public static readonly SwingData Plunge = new SwingData(16,0,45,30,55,300,150,0,8);
         public static int Count(Style style) => style == Style.Daggers ? 5 : 3;
         public static SwingData Get(Style style, int i)

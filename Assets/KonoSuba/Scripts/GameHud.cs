@@ -69,7 +69,16 @@ namespace AnimLab.KonoSuba
         // ------------------------------------------------------------------ Arrastar para a hotbar (estilo Metin2)
 
         AbilityBar bar;
-        public AbilityBar Bar => bar != null ? bar : bar = FindFirstObjectByType<AbilityBar>();
+        public AbilityBar Bar => bar != null && bar.name == "Player" ? bar : bar = LocalPlayer<AbilityBar>();
+        /// <summary>
+        /// Componente do jogador deste PC. Numa partida online existe uma cópia do Player (NetRemote) para o adversário:
+        /// procurar "o primeiro CharacterStats" podia apanhar a cópia; o jogador local é sempre o objeto "Player".
+        /// </summary>
+        public static T LocalPlayer<T>() where T : Component
+        {
+            var go = GameObject.Find("Player");
+            return go != null ? go.GetComponent<T>() : null;
+        }
         VisualElement dragGhost;
         Ability dragAbility;
         int dragFrom = -1;
@@ -194,6 +203,7 @@ namespace AnimLab.KonoSuba
         AnimLab.Netcode.Unity.OnlineMenu onlineMenu;
         SkillTreeWindow skillTrees;
         CharacterStats playerStats;
+        bool inOnlineMatch;
         Label healthText, manaText;
         readonly VisualElement[] slots = new VisualElement[9];
         readonly VisualElement[] slotGlows = new VisualElement[9];
@@ -253,6 +263,7 @@ namespace AnimLab.KonoSuba
             // As duas janelas partilham a suspensão sem restaurar o estado uma da outra.
             GameInput.Suspended = (settingsMenu != null && settingsMenu.IsBlockingInput) || (onlineMenu != null && onlineMenu.IsBlockingInput);
             AnimLab.Netcode.Unity.NetMatch.InputBlocked = GameInput.Suspended;
+            AnimLab.Netcode.Unity.NetMatch.KeyTaken ??= GameInput.IsBound;
             var net = AnimLab.Netcode.Unity.NetMatch.Active;
             if (net != null && net.Ready)
             {
@@ -260,15 +271,23 @@ namespace AnimLab.KonoSuba
                 maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxHealth);
                 mana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Mana);
                 maxMana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxMana);
-                statsWindow?.SetOpen(false);
-                skillTrees?.SetOpen(false);
+                inOnlineMatch = true;
+            }
+            else if (inOnlineMatch)
+            {
+                // A partida guardou a ficha do início; o que se mudou durante ela (C, V) entra agora no jogo.
+                inOnlineMatch = false;
+                if (playerStats == null) playerStats = LocalPlayer<CharacterStats>();
+                playerStats?.Apply(true);
             }
             foreach (VisualElement e in glowing) e.MarkDirtyRepaint();
             if (selectedSlot != lastSelected) { lastSelected = selectedSlot; RefreshSlots(); }
             for (int i = 0; i < 9; i++)
                 if (Time.time - deniedAt[i] < 0.3f || cooldowns[i] > 0f) StyleSlot(i);
             combat?.Update();
-            if (net == null) { statsWindow?.Update(); skillTrees?.Update(); }
+            // Os menus são locais: abrem também numa partida online (as mudanças valem na partida seguinte).
+            statsWindow?.Update();
+            skillTrees?.Update();
             Refresh();
         }
 
@@ -333,7 +352,7 @@ namespace AnimLab.KonoSuba
         void Refresh()
         {
             // Mana: degradê entre as cores das duas árvores escolhidas (sem árvores, o azul de sempre).
-            if (playerStats == null) playerStats = FindFirstObjectByType<CharacterStats>();
+            if (playerStats == null) playerStats = LocalPlayer<CharacterStats>();
             if (playerStats != null && playerStats.ManaColors(out Color a, out Color b)) manaBar.SetColors(a, b);
             else manaBar.SetColors(ManaColor, ManaColor);
             healthBar.SetValue(health / Mathf.Max(maxHealth, 1f));

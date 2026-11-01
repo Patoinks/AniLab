@@ -96,6 +96,12 @@ namespace AnimLab.KonoSuba
             return true;
         }
 
+        public override void CancelActive()
+        {
+            if (active != null) Destroy(active.gameObject);
+            active = null;
+        }
+
         /// <summary>A bola foi disparada: pode-se começar outra.</summary>
         public void Released(WaterBallProjectile ball)
         {

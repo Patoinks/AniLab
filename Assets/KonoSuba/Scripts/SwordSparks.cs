@@ -97,6 +97,9 @@ namespace AnimLab.KonoSuba
         }
 
         // Losango com 4 lados ao longo de Z (de -0.5 a 0.5), ponta fina atrás.
+        static Mesh sharedDiamond;
+        /// <summary>O mesmo losango 3D das faíscas (também usado na estrela do aviso de parry).</summary>
+        public static Mesh DiamondMesh => sharedDiamond != null ? sharedDiamond : sharedDiamond = Diamond();
         static Mesh Diamond()
         {
             var v = new[]

@@ -9,7 +9,7 @@ namespace AnimLab.Netcode.Tests
         static MatchState Duel()
         {
             var s=MatchState.Create(5);
-            for(int i=0;i<2;i++) { ref PlayerState p=ref MatchState.Player(ref s,i); p.Config.SetSlot(0,AbilityId.Dash); p.Config.SetSlot(1,AbilityId.FireBall); }
+            for(int i=0;i<2;i++) { ref PlayerState p=ref MatchState.Player(ref s,i); p.Config.Learn(AbilityId.Dash); p.Config.Learn(AbilityId.FireBall); }
             s.P0.Position=new FixVec3(0,0,0); s.P0.Yaw=0; s.P1.Position=new FixVec3(0,0,6); s.P1.Yaw=Fix.Pi;
             return s;
         }
@@ -17,21 +17,21 @@ namespace AnimLab.Netcode.Tests
         {
             var s=Duel(); var e=new EventBuffer();
             Fix mana=s.P0.Mana;
-            World.Step(ref s,new PlayerInput { Cast=1,Magnitude=15,MoveAngle=64 },default,e);
+            World.Step(ref s,new PlayerInput { Cast=(byte)AbilityId.Dash,Magnitude=15,MoveAngle=64 },default,e);
             Assert.AreEqual(mana-s.Abilities.DashMana,s.P0.Mana);
             for(int i=0;i<12;i++) World.Step(ref s,default,default,e);
             Assert.IsFalse(s.P0.Dashing);
             // Arranca no máximo e trava: ~ a distância do Dash para o lado (+X), mais o passo normal.
             Assert.IsTrue(s.P0.Position.X>s.Abilities.DashDistance*Fix.Ratio(85,100),"dash distance "+s.P0.Position.X);
             Fix before=s.P0.Mana;
-            World.Step(ref s,new PlayerInput { Cast=1 },default,e);
+            World.Step(ref s,new PlayerInput { Cast=(byte)AbilityId.Dash },default,e);
             Assert.IsFalse(s.P0.Dashing,"cooldown"); Assert.IsTrue(s.P0.Mana>before,"mana not spent");
         }
         [Test] public void FireBallFlysHitsBurnsAndExplodes()
         {
             var s=Duel(); var e=new EventBuffer(); bool impact=false,burning=false;
             Fix health=s.P1.Health;
-            World.Step(ref s,new PlayerInput { Cast=2,Targeted=true,TargetSlot=2 },default,e);
+            World.Step(ref s,new PlayerInput { Cast=(byte)AbilityId.FireBall,Targeted=true,TargetSlot=2 },default,e);
             Assert.AreEqual(AbilityId.FireBall,s.Q0.Kind);
             for(int i=0;i<90 && !impact;i++)
             {
@@ -47,7 +47,7 @@ namespace AnimLab.Netcode.Tests
         {
             var input=BotInputs.Combat(tick,player,s);
             int t=(tick+player*53)%240;
-            if(t==40) input.Cast=2; else if(t==150) { input.Cast=1; input.Magnitude=15; }
+            if(t==40) input.Cast=(byte)AbilityId.FireBall; else if(t==150) { input.Cast=(byte)AbilityId.Dash; input.Magnitude=15; }
             return input;
         }
         [Test] public void CastingBotsStayInSyncThroughRollback()

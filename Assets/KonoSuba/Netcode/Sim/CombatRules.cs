@@ -254,7 +254,7 @@ namespace AnimLab.Netcode.Sim
                     if(away.LengthSquared<F(1,10000)) away=a.Forward;
                     Fix dealt=Damage(ref s,id,j,a.Config.PlungeDamage*a.Config.DamageScale*k,55*a.Config.StaggerScale*k,
                         away.Normalized*5*k+FixVec3.Up*3*k,at,events);
-                    events.Add(s.Tick,EventKind.Hit,id,j,at,away.Normalized,dealt,visualStop:F(9));
+                    events.Add(s.Tick,EventKind.Hit,id,j,at,away.Normalized,dealt,visualStop:F(9),other:1);
                 }
             }
             Stop(ref s,F(9));

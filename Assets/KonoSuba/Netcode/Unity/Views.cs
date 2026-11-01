@@ -25,6 +25,8 @@ namespace AnimLab.Netcode.Unity
         /// <param name="source">O corpo de quem causou o evento (a cor das faíscas é a da arma dele).</param>
         void PresentNetEvent(SimEvent ev, Component source);
     }
+    /// <summary>Componente só de aspeto (lê o estado, não decide nada): continua ligado numa partida online.</summary>
+    public interface INetPresentation { }
     /// <summary>Componentes que contribuem para a configuração do lutador (hotbar, mana, ficha).</summary>
     public interface INetConfigSource
     {
@@ -43,6 +45,17 @@ namespace AnimLab.Netcode.Unity
         void SyncProjectile(int slot, ProjectileState now, ProjectileState before, float alpha, float dt);
         void ClearProjectile(int slot);
         void ApplyNetState(in PlayerState state, float now);
+    }
+    /// <summary>
+    /// O aspeto online de uma habilidade (no componente dela): eventos de lançamento/impacto e projéteis simulados.
+    /// A AbilityBar encaminha para o apresentador com o mesmo AbilityId.
+    /// </summary>
+    public interface INetAbilityPresenter
+    {
+        AbilityId NetAbility { get; }
+        void Present(SimEvent ev, GameObject other);
+        void Sync(int slot, in ProjectileState now, in ProjectileState before, float alpha, float dt);
+        void Clear(int slot);
     }
     /// <summary>A IA do lutador (DuelistAI): passa os parâmetros do Inspector para a IA da simulação.</summary>
     public interface INetBrainView

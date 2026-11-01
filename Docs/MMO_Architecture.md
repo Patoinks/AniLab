@@ -19,17 +19,17 @@ Três limites condicionam a decisão:
 | Evidência lida | Consequência para o plano |
 |---|---|
 | `Docs/Biblia.md`: sete elementos, estados, Avatar State, Bankai e Domain Expansion; o texto distingue visão e implementação | Os três poderes simultâneos precisam de estados de combate; Domain Expansion 1v1 dentro do MMO não transforma o jogo num produto de duelos |
-| `Sim/World.cs`, `State.cs`, `CombatRules.cs`: 60 Hz, `P0/P1`, referências `1-id`, chão y=0, raio 20, cinco estilos | Há um núcleo de combate reutilizável, não uma simulação de mundo com entidades arbitrárias |
-| `PlayerInput.WireSize=5`; `StateCodec.Version=3`; Q32.32; `Fix` usa `BigInteger` em multiplicação/divisão/raiz | Bons contratos determinísticos iniciais; custo e compatibilidade entre plataformas ainda precisam de medição para N entidades |
+| `Sim/World.cs`, `State.cs`, `CombatRules.cs`: 60 Hz, `P0..P7`, `Count`, equipas, alvo e `StruckMask`; chão y=0, raio 20, cinco estilos | Já suporta até oito lutadores de simulação, mas não entidades arbitrárias nem mais de dois peers de rede |
+| `PlayerInput.WireSize=11`; `StateCodec.Version=6`; Q32.32; `Fix` usa intermediários de 128 bits em `ulong`, sem `BigInteger` no caminho aritmético | Contratos já evoluíram; preservar compatibilidade por versão e medir o conteúdo MMO nas plataformas alvo |
 | `RollbackSession`: 128 estados, máximo 8 ticks, dois streams; checksums confirmados de 30 em 30 ticks | Reutilizar o algoritmo; generalizar armazenamento, confirmação e identidade; não aumentar apenas um tamanho de array |
 | `MatchHandshake`: cada cliente propõe stats dentro de intervalos | Válido para laboratório; inadmissível como origem dos stats de um MMO |
-| `Ability`, `AbilityBar`, projéteis e `DuelistAI` dependem de Unity, floats, relógio, física e/ou RNG locais | IA e habilidades precisam de separar regra determinística e apresentação |
+| `Sim/DuelistBrain.cs` já porta a IA; `Sim/Abilities.cs` simula Dash/Bola de Fogo, mana, cooldowns, projéteis e duração/resistência dos estados; restantes habilidades ainda dependem dos scripts Unity | Reaproveitar o porte existente e completar regras/conteúdo; não voltar a começar a IA e as duas habilidades do zero |
 | `Combatant` mantém estados, duração e resistências; `CharacterStats` e a hotbar usam `PlayerPrefs` | Estado persistente e validação das escolhas passam para o backend; o cliente apresenta uma cópia |
 | Fogo e água chamam efetivamente `Combat.Explode`/`TakeHit`; vários outros efeitos são sobretudo visuais/física de objetos | Não assumir que a aparência de Lightning/Kirin/Thunder/tornados já define dano e regras completas |
 
-O relatório anterior regista 39/39 testes e convergência Mono/CoreCLR e entre dois processos Windows. São **resultados históricos**, não testes executados para este plano, nem prova de Linux ARM64, IL2CPP, cinco peers, bosses, segurança ou capacidade MMO. A validação em dois PCs físicos era ainda pendente nesse relatório.
+O relatório anterior regista 39/39 testes na fase 5, 54/54 na fase Steam e 60/60 na atualização parcial da fase 7, além de convergência Mono/CoreCLR e entre dois processos Windows nos cenários descritos. São **resultados históricos**, não testes executados para este plano, nem prova de Linux ARM64, IL2CPP, cinco peers, bosses, segurança ou capacidade MMO. A validação em dois PCs físicos continua indicada como pendente.
 
-Durante a leitura apareceram alterações locais por gravar, incluindo `Steam/`, `SteamOnline.cs`, `SteamSmokeRun.cs`, `SteamEditorLifetime.cs`, `DatagramSession.cs` e alterações aos transportes, menu, assemblies e pacotes. Há assim código mais recente do que o progresso documentado. Foi apenas lido e fica preservado; a §10 inclui-o na migração planeada. Não se presume uma revisão atómica de ficheiros que estão a ser trabalhados em paralelo.
+Na execução anterior foram observadas alterações locais por gravar. Na retoma de 31/10/2026, o Git estava limpo e a leitura confirmou código mais recente em Sim/IA/habilidades e o registo parcial da fase 7. A §10 usa este inventário atualizado, incluindo Steam e `DatagramSession.cs`; as escritas desta tarefa limitaram-se a este documento. Houve evolução concorrente de ficheiros Steam/UI durante a leitura, pelo que o inventário descreve responsabilidades e não uma revisão atómica do código.
 
 ### 1.2 Proposta versus validação
 
@@ -140,7 +140,7 @@ Um processo .NET/Linux é dono de cada `(Region, Shard, Zone, Channel, Epoch)`. 
 - Objetivo por zona ocupada: CPU/tick p95 ≤ **8 ms**, p99 ≤ **12 ms**, incluindo simulação, geração de deltas e consultas históricas; watchdog antes de ultrapassar 16,67 ms sustentadamente. I/O e persistência ficam fora do loop de simulação.
 - Estado e geração de eventos têm um escritor por zona. Processar entidades e candidatos de contacto por IDs estáveis; paralelizar zonas e jobs independentes antes de introduzir concorrência dentro do resultado de um tick.
 - O servidor recebe intenções; valida velocidade, recursos, equipamento, habilidade aprendida, cooldown, alcance e sequência. Configurações de cliente, relógio local e resultados de física Unity não têm autoridade.
-- Sem `Time.timeScale` global: hit-stop afeta os corpos envolvidos segundo regras; o resto da zona continua. Slow-motion, faíscas, nevoeiro e câmera são apresentação local. Os atuais `Stop`/`Clash` que atuam em P0/P1 precisam de generalização explícita.
+- Sem `Time.timeScale` global: hit-stop afeta os corpos envolvidos segundo regras; o resto da zona continua. Slow-motion, faíscas, nevoeiro e câmera são apresentação local. O atual `Stop` congela todos os lutadores e os projéteis da sessão; limitar o efeito aos participantes no mundo exige uma alteração explícita de regras, preservando o comportamento da dungeon até decisão de design.
 
 ### 4.2 Previsão local e reconciliação
 
@@ -169,7 +169,7 @@ Para golpes melee, manter **250 ms de histórico** de cápsulas, yaw, segmentos 
 
 Política inicial, deliberadamente conservadora:
 
-1. Gerar o varrimento da lâmina validada no tick de resolução `T`. Cada ataque tem `AttackInstanceId` e conjunto de alvos já atingidos, em vez do único `Struck` do duelo.
+1. Gerar o varrimento da lâmina validada no tick de resolução `T`. Cada ataque tem `AttackInstanceId` e conjunto de alvos já atingidos, generalizando a atual `StruckMask` de slots fixos para IDs de entidades.
 2. Para corrigir a posição remota vista pelo atacante, consultar a cápsula da vítima em `T - L`, com `L = min(100 ms, RTT_base/2 + 50 ms)`. `RTT_base` usa amostras robustas da ligação, não um timestamp escolhido pelo cliente nem o pico de um lag switch. Limitar também a diferença de posição histórica a **0,5 m**; reduzir L quando ultrapassar esse deslocamento.
 3. A lâmina é a do ataque autoritativo atual; a consulta da cápsula histórica é uma concessão espacial assimétrica explícita. Não equivale a reconstruir duas realidades perfeitamente simultâneas. Guardas, invulnerabilidade, morte e recursos usam o estado **atual da resolução**. Favorece defesa atual e evita anular uma defesa já aceite.
 4. Validar linha de contacto/bloqueadores atuais e históricos para não confirmar um golpe através de uma porta fechada/parede. Guardar histórico de portas se forem móveis. Não aumentar livremente hitboxes para compensar latência.
@@ -260,7 +260,7 @@ Portas, plataformas, chão, alturas, inclinações e obstáculos precisam de col
 
 ### 5.2 Mobs e bosses
 
-Portar a lógica de `DuelistAI.cs` para uma função pura sobre `AIState + estado da simulação`, não executar o MonoBehaviour no servidor nem gravar só o seu resultado como input confiável.
+Reaproveitar o porte já existente em `Sim/DuelistBrain.cs`, com RNG e memória em `AiState`, e adaptá-lo a mobs/bosses e IDs arbitrários. Não executar `DuelistAI.cs` como MonoBehaviour no servidor nem gravar só o seu resultado como input confiável.
 
 - Estado da IA inclui alvo, aggro, ameaça por peer, próxima decisão, tempos de reação, combo pendente, direção de strafe, fase e cooldowns de boss.
 - Decisões a **10 Hz**; movimento/armas/hitboxes a 60 Hz. Converter os intervalos atuais de 0,15–0,4 s para ticks inteiros e guardar os agendamentos no snapshot.
@@ -274,9 +274,9 @@ Portar a lógica de `DuelistAI.cs` para uma função pura sobre `AIState + estad
 | Origem atual | Regra a portar / decidir | O que fica no Unity |
 |---|---|---|
 | `Ability.cs`, `AbilityBar.cs` | `AbilityId`, autorização pela árvore/loadout, mana, regeneração, cooldown, cast, canalização, interrupção e flancos de input | HUD, ícones, drag/drop e pedido de ação |
-| `DashAbility.cs` | Trajetória, duração, colisão e custo; não é apenas um VFX nem o mesmo movimento que Roll | Rasto, água, nevoeiro e pose |
+| `DashAbility.cs` e `Sim/Abilities.cs` | Reaproveitar trajetória/custo/cooldown já portados; completar colisão de mapa e validar paridade; não é o mesmo movimento que Roll | Rasto, água, nevoeiro e pose |
 | `WaterBallAbility.cs`, `WaterBallProjectile.cs`, `WaterGather.cs` | Volume/carga, custo por fração, disponibilidade de água, compressão, soltar, mira, voo, impacto e Wet | Gotas, malha, tremor e fusão visual; o instante de absorção de gameplay deve ter regra fixa |
-| `FireBallAbility.cs`, `FireBallProjectile.cs` | Formação, trajetória, raio/colisões, explosão, defesa mágica, Burning e lista de alvos por ID | `FireBallEffect`, `FireBallFlightVisual` e partículas |
+| `FireBallAbility.cs`, `FireBallProjectile.cs` e `Sim/Abilities.cs` | Reaproveitar formação, trajetória, explosão, defesa mágica e aplicação de Burning; completar efeitos periódicos, equipas e alvos por ID | `FireBallEffect`, `FireBallFlightVisual` e partículas |
 | `WindBallAbility.cs`, `WindBallProjectile.cs` | Canalização/compressão, trajetória, impacto e impulso em entidades de gameplay | Vórtice e detritos; `Rigidbody.AddForce` atual não define knockback de uma personagem de rede |
 | `LightningAbility.cs`, `LightningDischarge.cs`, `LightningWaterGrid.cs` | Alcance, conectividade de água, propagação, escolha de alvos e Wet/Static; definir o dano que não está completamente implementado como regra atual | Ramificações decorativas, glow e desenhos dos raios |
 | `KirinAbility.cs`, `KirinEffect.cs`, `ThunderAbility.cs` | Tempo de cast/impacto, alcance, alvos, dano e propagação em dados; não deduzir dano da chegada de uma malha | Dragão, geometria, luz e impacto |
@@ -320,7 +320,7 @@ Um frame que re-simula 8 ticks antigos e avança 1 novo executa **9 ticks**. A 6
 | 5 + 32 = 37 | 0,25 ms | 0,45 ms | 4,05 ms | Teto alvo do MVP |
 | 5 + 64 = 69 | 0,55 ms | 1,00 ms | 9,00 ms | Não admitir sem outra otimização/prova |
 
-**A tabela é um objetivo, não um benchmark.** Os `BigInteger` atuais, trigonometria, segmentos e até 16 subpassos de cada lâmina podem excedê-lo bastante. Medir primeiro com o código real. O custo não cresce só com N: pares potenciais, área/conectividade, projéteis e quantidade de lâminas ativas dominam. Usar broadphase espacial, consultas com ordem estável, distâncias ao quadrado, pooling e cache de geometria que não dependa de estados futuros.
+**A tabela é um objetivo, não um benchmark.** `Fix` já substituiu `BigInteger` por aritmética de 128 bits em `ulong`; isso não mede o custo de 37 entidades, trigonometria, segmentos e até 16 subpassos de cada lâmina. Medir primeiro com o código real. O custo não cresce só com N: pares potenciais, área/conectividade, projéteis e quantidade de lâminas ativas dominam. Usar broadphase espacial, consultas com ordem estável, distâncias ao quadrado, pooling e cache de geometria que não dependa de estados futuros.
 
 Limites iniciais de conteúdo: **32 mobs ativos**, **64 projéteis**, **16 áreas persistentes**, **256 eventos por tick**, com limites de spawns por habilidade e candidatos de contacto demonstrados em teste. Não descartar impactos silenciosamente ao exceder um buffer. Um conteúdo que ultrapassa a capacidade não é publicável; em runtime, falha controlada e run em análise.
 
@@ -342,7 +342,7 @@ Separar canal de inputs não fiável com sequência/acks/recuperação seletiva,
 
 ### 6.2 Formato e tráfego
 
-Proposta de `InputV2` base de **16 B por peer/tick**, em vez dos 5 B do duelo:
+Proposta de `InputV2` base de **16 B por peer/tick**, a suceder ao formato atual de 11 B (o duelo inicial usava 5 B):
 
 ```text
 buttons: u16 (2), moveAngle: u8 (1), magnitude: u8 (1), lookYaw: u16 (2),
@@ -447,11 +447,11 @@ Separar `InvalidGameplay`, `ProtocolViolation`, `DesyncSuspected` e `Infrastruct
 
 Para uma run de **30 minutos a 60 Hz = 108 000 ticks**, sem compressão:
 
-| Participantes | Input atual de 5 B | InputV2 de 16 B | Upload próprio de cada membro em V2 |
+| Participantes | Input atual de 11 B | InputV2 de 16 B | Upload próprio de cada membro em V2 |
 |---:|---:|---:|---:|
-| 2 | 1,08 MB | 3,456 MB | 1,728 MB |
-| 4 | 2,16 MB | 6,912 MB | 1,728 MB |
-| 5 | 2,70 MB | 8,640 MB | 1,728 MB |
+| 2 | 2,376 MB | 3,456 MB | 1,728 MB |
+| 4 | 4,752 MB | 6,912 MB | 1,728 MB |
+| 5 | 5,940 MB | 8,640 MB | 1,728 MB |
 
 MB decimais. Acrescentar aproximadamente **5–15%** para cabeçalhos de blocos, recibos, controlos e hashes. 1 800 recibos de assinatura de 64 B são **115,2 kB**, antes dos seus campos; 1 800 hashes SHA-256 são **57,6 kB** por sequência. Não guardar snapshots completos a cada segundo no arquivo normal: aumentariam muito o volume. Guardar estado inicial, hashes e dumps apenas onde necessário.
 
@@ -473,3 +473,486 @@ Verificar só 10% das runs e pagar as restantes não cumpre essa garantia. Com s
 
 Amostragem é aceitável como experiência de telemetria sem recompensas económicas, ou como uma decisão futura de produto que aceite explicitamente risco e limites. Se essa alternativa for escolhida, a seleção tem de ser secreta no backend até o log estar comprometido; mas isso não transforma as runs não verificadas em progresso provado. Conteúdo raro/negociável deve continuar integralmente verificado ou autoritativo.
 
+## 8. Serviços e persistência
+
+### 8.1 Distribuição concreta na AWS
+
+**Proposta inicial:** uma região de escrita, **Europe (Ireland), `eu-west-1`**, com serviços e dados em duas Availability Zones. Medir RTT de jogadores portugueses para Irlanda, Frankfurt e Espanha antes de fixar a região de gameplay. Frankfurt (`eu-central-1`) é alternativa de região completa; Espanha (`eu-south-2`) aparece na lista GameLift como localização remota de frota, não como Home Region com todos os serviços GameLift. Não pressupor disponibilidade igual entre regiões. [S22]
+
+| Componente | Escolha proposta | Motivo e limite |
+|---|---|---|
+| Protótipo local | Executável .NET 10, sem Unity; PostgreSQL local apenas na fase de persistência | Provar o ciclo de autoridade antes de contratar infraestrutura |
+| Mundo, primeira prova AWS | EC2 Linux `c7g.xlarge`, 4 vCPU/8 GiB, On-Demand; processos de zona isolados e imagem de container versionada | Endpoints UDP diretos e controlo do ciclo de vida. ARM64 só após teste de determinismo; fallback x86 `c7i.xlarge`, com preço recalculado |
+| Mundo, opção de produção a comparar | GameLift Servers managed EC2 ou managed containers, Linux, família c6g/c7g elegível | Inclui operação da frota e tráfego elegível. Uma sessão por zona/canal; não fornece persistência de MMO. Exige SDK, leases, checkpoints, draining e recuperação próprios |
+| Relay de dungeon | Auto Scaling Group de EC2 `c7g.xlarge` em duas AZ, container por nó e atribuição de runs pelo coordenador | Endpoint UDP e época estáveis durante a run. Não assumir tráfego gratuito de GameLift para um relay EC2 |
+| Verificadores | Workers .NET em ECS sobre EC2 `c7g.xlarge`, fila SQS, pelo menos dois nós quentes na estimativa | Amortizar arranque e executar várias runs independentes por nó. Reserva On-Demand e Spot opcional para excesso retomável |
+| Gateway/API, party e chat inicial | ASP.NET Core em ECS Fargate Linux/ARM64, duas réplicas, ALB HTTPS/WSS | Um serviço modular no início, com autorização por operação; separar deployments quando carga/falhas o justificarem |
+| Dados económicos e personagens | Amazon RDS for PostgreSQL, Multi-AZ na produção | Transações, unicidade, ledger e migrações. Sem acesso direto do cliente |
+| Logs e conteúdo de regras | S3 Standard, buckets privados por ambiente, lifecycle de 7/30 dias para replays | Guardar builds/regras por hash enquanto houver runs pendentes; esse arquivo tem retenção distinta |
+| Fila e credenciais | SQS Standard + DLQ, KMS, Secrets Manager e IAM roles por serviço | Entrega pelo menos uma vez e idempotência na aplicação; segredos fora do cliente |
+| Presença/fanout a maior escala | ElastiCache for Valkey, se a medição justificar | Estado efémero e pub/sub; perder a cache não perde inventário nem decide recompensas |
+
+Usar containers para empacotar o mesmo servidor/verificador, sem confundir **ECS sobre EC2**, **Fargate** e **GameLift managed containers**: são formas diferentes de operar e cobrar computação. Fargate é adequado à API, mas não é necessário colocar cada zona ou cada replay numa task nova. Não introduzir Kubernetes/EKS no MVP. [S12][S25]
+
+Em GameLift, a API documenta máximo de **200 jogadores por game session** e **50 processos por instância**; não são metas de desempenho. Os limites de 100/150 por zona cabem na primeira restrição, mas não há daí prova de CPU suficiente. Para zonas persistentes, retirar novas entradas, transferir jogadores e só depois encerrar um processo; autoscaling de partidas não migra sozinho um mundo vivo. A opção managed só passa a produção depois deste ensaio. [S23]
+
+### 8.2 Conta, login e acesso ao jogo
+
+Escolher **Amazon Cognito User Pools Lite** para conta por email/password no MVP. O cliente usa o fluxo suportado para aplicação pública, sem `client_secret` embutido; recuperação/verificação de email por SES. Se forem necessárias passkeys/Managed Login avançado, escolher Essentials e recalcular MAU. Uma identidade Steam futura pode ligar-se a uma conta por verificação no backend, sem tornar Steam requisito de transporte ou confiar num Steam ID enviado livremente. [S14]
+
+Fluxo proposto:
+
+1. Cognito autentica; o gateway verifica assinatura/JWKS, emissor, audience/client ID apropriado, `token_use`, scopes e expiração do token. `sub` mapeia para `AccountId`; nome/email não são a chave da personagem.
+2. Gateway consulta banimentos, estado da conta e autorização sobre `CharacterId`. Tokens válidos não autorizam usar a personagem de outra conta.
+3. Criar uma sessão de jogo revogável no backend e reservar a posse da personagem. Recomendação: **uma sessão de gameplay ativa por personagem**; um segundo login oferece retomar/substituir explicitamente a ligação anterior.
+4. Emitir ticket de entrada de **60 s**, de uso único, restrito a personagem, região, endpoint, protocolo e `ownerEpoch`. Este ticket dá acesso ao handshake seguro de zona/relay; não enviar o refresh token Cognito em UDP.
+5. Zona/relay valida ticket e posse, estabelece chaves de ligação e confirma o slot. Reconexão emite novo ticket, preserva a identidade e invalida a ligação anterior.
+
+Sessões de gameplay têm heartbeats e expiração próprios. Logout/revogação no backend invalida novas operações e novas entradas; não confiar apenas na expiração de um JWT já emitido. Limitar tentativas por conta/IP, permitir MFA para operações sensíveis e não guardar passwords no PostgreSQL. Guardar apenas identificadores e dados de jogo necessários.
+
+### 8.3 Modelo de dados da personagem e da economia
+
+**PostgreSQL é a fonte de verdade.** Não guardar toda a personagem como um JSON substituível por `SaveCharacter` do cliente. JSONB pode servir para flags versionadas, mas itens, moedas, posse e pagamentos precisam de chaves/restrições consultáveis.
+
+| Tabela/contrato conceptual | Conteúdo e invariantes |
+|---|---|
+| `Account` / `GameSession` | ID interno, Cognito sub único, estado/restrições; sessões revogáveis, expiração e dispositivo lógico |
+| `Character` | Conta dona, nome, XP/nível, atributos base, pontos disponíveis, revisão otimista e versão de conteúdo |
+| `CharacterTree` / `LearnedNode` | Árvores A/B e nós aprendidos com pontos gastos; backend valida dependências/exclusões e custo |
+| `CharacterLoadout` / `HotbarSlot` | Estilo, equipamento e slots 0–8 por `AbilityId`; habilidade aprendida e compatível com a árvore |
+| `ItemInstance` / `InventorySlot` | GUID do item, definição/versionamento, quantidade, dono, contentor/slot e estado escrow; unicidade de localização |
+| `Wallet` / `EconomyLedger` | Saldos inteiros sem negativos, origem/destino, motivo e chave idempotente; nunca moeda em float |
+| `CharacterOwner` / `ZoneCheckpoint` | Zona/run, lease, época e versão; checkpoint vivo com tick e hashes, separado do inventário |
+| `Party` / `PartyMember` / `MatchTicket` | Membros, líder, revisão, convites, ready check, região e prazo; uma reserva ativa por personagem |
+| `DungeonRun` / `Escrow` | Manifesto imutável, membros/fichas de entrada, política, raiz do log, estado da saga e itens reservados |
+| `Validation` / `RewardGrant` / `Outbox` | Resultado interno e deltas, recompensa única por run/membro/objetivo, notificação durável para gateway/zona |
+| `DeliveryInbox` / `QuestProgress` | Recompensas sem slot disponível e progresso com revisão, sem perder itens por inventário cheio |
+
+Stats derivados são calculados com definições versionadas; um cache pode guardar o resultado com o hash dos dados que o produziram. Alterar hotbar, estilo ou árvores é um comando validado e aplicado num ponto seguro, não uma mutação arbitrária a meio de um replay. A run mantém a ficha de entrada mesmo se o balanceamento global mudar.
+
+Regras de escrita:
+
+- Só o serviço de progresso/economia escreve inventário, XP e moeda. Zonas enviam eventos autenticados com `zoneEpoch + eventSequence + characterId`; um processo com lease antiga não pode pagar.
+- Uma transação de recompensa verifica `ValidationId` e estado da run, insere a chave única de pagamento, consome escrow, aplica deltas e escreve outbox. Falha faz rollback da transação; retry devolve o mesmo resultado.
+- Troca entre personagens, crafting e transferência de item reservam as linhas relevantes em ordem estável e validam saldo/posse. Os dois lados e o ledger mudam na mesma transação. Uma cache ou mensagem de chat não é prova de troca.
+- Save de posição/vitais por zona a cada **5 s**, além de handoffs e fecho. Persistência económica síncrona antes de confirmar o prémio ao jogador. Não fazer uma escrita PostgreSQL por entidade/tick.
+- Outbox só se marca entregue após ack; consumidores toleram duplicados e revisões fora de ordem. Leitura em réplicas assíncronas não decide saldo, posse ou autorização de recompensa.
+
+Iniciar com um writer regional e pooling de ligações com limites por serviço. `db.t4g.medium` Multi-AZ é ponto de partida de pequena produção; acompanhar créditos de CPU, locks, IOPS e latência. Migrar para `db.m7g.large/xlarge` antes de saturar, conforme medição. Não abrir milhares de ligações só porque há milhares de jogadores. DynamoDB fica como alternativa para acessos muito simples a grande escala, não uma segunda fonte de inventário; Aurora fica em avaliação se o padrão de leitura/HA justificar o custo. [S13]
+
+Backups automáticos/PITR com retenção proposta de **14 dias**, snapshot antes de migrações e exercício de restauro numa base isolada. Multi-AZ protege disponibilidade, não substitui backup contra erro lógico. Meta inicial de restauro regional **RTO ≤2 h**, a demonstrar; o RPO zero de itens confirmados refere-se ao fluxo transacional normal, não garante perda zero numa catástrofe regional sem replicação síncrona adicional.
+
+### 8.4 Party, procura de grupo e reserva
+
+Separar party social, ticket de procura e run: trocar de líder não muda a autoridade da dungeon nem a posse dos itens. O MVP permite convidar por ID, aceitar, sair, expulsar antes de reservar e ready check para 2–5 membros. Cada comando inclui revisão/idempotency key; dois convites aceites em simultâneo não criam duas parties elegíveis para a mesma personagem.
+
+Começar com matchmaking próprio: fila por região, dungeon, dificuldade, versão de regras, tamanho do grupo e elegibilidade; privilegiar a latência máxima do grupo. Match por skill/função só quando o design o definir. Após **30 s**, pode alargar critérios de composição, com aviso, sem ultrapassar silenciosamente o limite de latência. Reserva dura **60 s** e usa a saga da §3; sem capacidade fica em fila, não abandona primeiro a zona.
+
+FlexMatch é alternativa gerida se as regras se tornarem complexas. O modo **standalone**, aplicável a P2P/EC2, tem cobrança própria; uso integrado em hosting GameLift tem condições diferentes. O orçamento abaixo usa a fila própria e **não** atribui custo zero ao FlexMatch standalone. [S24]
+
+### 8.5 Chat, presença e gateway
+
+Chat por **WebSocket sobre TLS**, com canais local/zona, party, guild futura e mensagens privadas. O servidor valida pertença e bloqueios; não deixa um cliente subscrever qualquer `ChannelId`. Local acompanha a zona atual por evento de posse, não por coordenadas alegadas pelo cliente.
+
+Limites iniciais: mensagem até **512 bytes UTF-8**, **1/s sustentada**, burst de **5**, filas de saída limitadas e expulsão de consumidores lentos. Escapar texto na UI, impedir markup/comandos arbitrários, suportar mute/report e definir retenção de denúncias. Sem voz no MVP. Mensagens podem perder-se numa falha, mas chat nunca transporta ações económicas autoritativas.
+
+Gateway mantém as ligações WSS e encaminha comandos internos; estado de party é durável em PostgreSQL. Presença é efémera. Em pequena escala, notificações entre réplicas podem usar outbox e PostgreSQL LISTEN/NOTIFY como aviso, relendo o estado durável; não como histórico fiável de chat. Quando o fanout justificar, Valkey pub/sub distribui por gateways com IDs e tolerância a perda/duplicação. SQS de workers não é um broadcast automático para todos os sockets.
+
+API e chat podem partilhar deployment inicial, com quotas e pools separados. O combate usa o endpoint UDP atribuído. Não enviar snapshots de 60 Hz pelo ALB nem abrir uma ligação à base de dados por socket.
+
+### 8.6 Rede, operação e expansão regional
+
+RDS fica em sub-redes privadas. Para evitar NAT Gateway no primeiro orçamento, tasks de API podem ter saída pública controlada com IPv4 próprio e security groups que só aceitam entrada do ALB; workers usam endpoints AWS ou saída dimensionada. A topologia final deve contabilizar **ou** NAT **ou** endpoints/IPv4, sem os declarar gratuitos. Dados relay→S3 ficam na mesma região; tráfego entre AZ e fanout de chat entram no orçamento auxiliar.
+
+TLS no controlo, transporte seguro da §6 no combate, IAM mínimo por processo e SG sem portas de administração públicas. Métricas: tempo de tick, p99, stalls, bytes/s, profundidade/idade da fila de replay, tempo até pagar, falhas de lease e duplicados rejeitados. Logs de diagnóstico não registam passwords/tokens nem todos os inputs em CloudWatch; logs binários ficam em S3.
+
+Uma segunda região é decisão posterior: duplicar gateway/relay/capacidade mínima e escolher a região de residência da personagem. Não usar replicação assíncrona multiwriter para permitir gastar o mesmo item em dois continentes. Transferência regional exige fechar a posse anterior e confirmar importação idempotente. Backups noutra região melhoram recuperação, mas acrescentam preço e política de dados; não estão incluídos como operação ativa na §9.
+
+## 9. Estimativa mensal de custos e comparação
+
+### 9.1 Âmbito e qualidade dos preços
+
+**Estimativa de arquitetura, não orçamento contratado nem benchmark.** Valores em **USD/mês**, antes de IVA, câmbio, suporte e trabalho humano. Consulta das fontes: **31/10/2026**. Mês de **730 h**. `C = 100 / 1 000 / 10 000` significa **CCU médio sustentado durante o mês**, não apenas um pico de cinco minutos.
+
+As tabelas usam tarifas de referência públicas de **US East**, identificadas abaixo, para tornar a conta reproduzível. **Não são uma cotação de `eu-west-1`**: a extração das tabelas regionais dinâmicas de EC2/RDS não ficou acessível nesta consulta. O preço c7g é um exemplo publicado pela AWS, que pode estar desatualizado. A recomendação operacional continua europeia (§8); antes de contratar, substituir as tarifas no AWS Pricing Calculator pela região/SKU escolhidos. Para planeamento inicial europeu, reservar adicionalmente **25% sobre os totais**, como margem escolhida para este plano, não como diferença regional verificada. [S11][S26]
+
+| Unidade usada na conta | Valor de referência | Proveniência / ressalva |
+|---|---:|---|
+| EC2 Linux `c7g.xlarge` (4 vCPU/8 GiB) | $0,145/h | Exemplo AWS em N. Virginia; valor indicativo, não tarifa europeia verificada [S11] |
+| GameLift Linux `c6g.large` (2 vCPU/4 GiB) | $0,088/h | Tabela AWS para Ohio, explícita na versão chinesa da página; não é região China [S1] |
+| Tráfego GameLift gen. ≥6 elegível | $0 de bandwidth | Alteração de 15/06/2026; não a estender a EC2, relay, ALB ou todos os serviços [S2] |
+| EC2 saída Internet | 100 GB/mês gratuitos; depois $0,09/GB nos primeiros 10 TB, $0,085 nos 40 TB seguintes, $0,07 nos 100 TB seguintes, $0,05 acima | Escalões de referência US East; franquia partilhada pela conta, aplicada uma vez por cenário [S11] |
+| IPv4 público | $0,005/IP/h | Incluído por nó de jogo/relay e reservado para ALB/tasks [S17] |
+| Disco EC2 gp3 | $0,08/GiB-mês | 30 GiB por nó EC2 = $2,40/mês; não aplicar este preço a RDS [S18] |
+| Fargate Linux ARM | $0,03238/vCPU-h + $0,00356/GiB-h | Conversão dos preços por segundo do exemplo N. Virginia [S12] |
+| ALB | $0,0225/h + $0,008/LCU-h | Exemplos US East; IPv4 e tráfego adicional separados [S16] |
+| S3 Standard / requests | $0,023/GB-mês; PUT $0,005/1 000; GET $0,0004/1 000 | Referência AWS de custo US East; armazenamento/requests calculados abaixo [S15] |
+| Cognito Lite | 10 000 MAU gratuitos; escalões seguintes $0,0055 e $0,0046/MAU | Assumir login direto/social, sem ASF/SAML/OIDC empresarial; emails/SMS separados [S14] |
+| PostgreSQL, logs, filas e segurança | Intervalos de reserva da §9.4 | Estimativas do plano, **não preços unitários confirmados**; fontes explicam os fatores faturáveis [S13][S19][S20][S21] |
+
+Não usar Spot, Savings Plans, créditos promocionais ou free tier de máquinas para fazer a comparação base parecer mais barata. Só a franquia recorrente de tráfego e a de Cognito explicitadas entram na conta. A disponibilidade de SDK/CPU ARM64 continua por provar no projeto.
+
+### 9.2 Pressupostos de capacidade e fórmulas
+
+Todos os números de capacidade são **hipóteses para medir**:
+
+- Mundo EC2: **2 zonas de 100 lugares por c7g.xlarge**, com ocupação planeada de 80% → **160 jogadores/nó**. A GameLift c6g.large, com metade dos vCPU, atribuir **1 zona →80 jogadores/nó**; não presumir equivalência de desempenho entre gerações.
+- Relay: meta da §6, **250 parties/nó**, ocupação de 80%, média de **4 membros** → **800 jogadores/nó**.
+- Replay: **100% dos ticks de todas as runs**, 0,25 ms/tick/party → **0,015 vCPU por party contínua**. Num worker de 4 vCPU a 60% de ocupação, cabem em média **160 parties equivalentes →640 jogadores/nó**. Esta reserva já cobre a ocupação; não aplicar outra vez o fator de 80%.
+- Alternativa de dungeon autoritativa em GameLift: **40 parties/processos por c6g.large**, 80% ocupados →**128 jogadores/nó**. O limite de 40 fica abaixo dos 50 processos/instância documentados; replicação/cripto/memória ainda precisam de caber. O custo de Sim dessas 40 parties seria 0,6 core médio, antes desses extras. [S23]
+- Mínimo de **2 nós por frota/pool** nos cenários, distribuídos por duas AZ, incluindo workers quentes. É redundância básica, **não capacidade garantida para absorver a perda de uma AZ** à carga máxima.
+- Tráfego de saída: mundo **12 000 B/s/jogador** (§4), relay **6 000 B/s/jogador** (§6). Party com 5 e áreas densas são sensibilidades, não ocultadas numa média de quatro.
+- Run de **30 min**: `runs/mês = (C/4) × (730/0,5) = 365 C`. Sem compressão, reservar **8 MB canónicos/run**, aproximando 6,912 MB +15%; guardar 7 dias, mais casos divergentes à parte.
+- S3 por run: **40 PUT** (blocos de minuto, fecho, claims/metadata) e **31 GET** para o worker; claims duplicados removidos após comparação. Custos adicionais de investigação/versionamento entram na reserva auxiliar.
+
+Para a conta de transferência e armazenamento, converter bytes para `GB faturável ≈ GiB = bytes/2^30`, e TB para 1 024 desses GB; os kB/s/MB do protocolo continuam decimais. Revalidar a convenção no export da calculadora. Não multiplicar o volume de relay por três novamente: os 6 kB/s já incluem os streams distribuídos a cada destinatário.
+
+```text
+T = 730 × 3 600 = 2 628 000 segundos
+N_worldEC2 = max(2, ceil(C / 160))
+N_worldGL  = max(2, ceil(C / 80))
+N_relay    = max(2, ceil(C / 800))
+N_replay   = max(2, ceil((C/4 × 0,015) / (4 × 0,60)))
+N_dungeonGL = max(2, ceil(C / 128))
+
+P_EC2_mês = 730 × (0,145 + 0,005) + 30 × 0,08 = $111,90/nó
+P_GL_mês  = 730 × (0,088 + 0,005) = $67,89/nó
+G_world = C × 12 000 × T / 2^30
+G_relay = C ×  6 000 × T / 2^30
+
+E(G): descontar 100 GB uma vez; aplicar marginalmente os escalões
+10 240 GB × 0,09; seguintes 40 960 × 0,085;
+seguintes 102 400 × 0,07; restante × 0,05.
+
+C_worldEC2 = N_worldEC2 × 111,90 + E(G_world)
+C_worldGL = N_worldGL × 67,89
+C_P2P = (N_relay + N_replay) × 111,90 + E(G_relay) + S3_logs
+C_dungeonGL = N_dungeonGL × 67,89
+```
+
+Um replay rápido reduz a espera da recompensa, **não o total CPU/mês**. A 10 000 CCU em dungeons seriam 2 500 parties, **37,5 cores médios** de Sim; a 60% de ocupação, 62,5 vCPU, arredondados a **16 workers de 4 vCPU**.
+
+### 9.3 Comparação do custo variável de gameplay
+
+Cada coluna é um **cenário alternativo para os mesmos C jogadores**, todos nesse tipo de atividade. Não somar as colunas como se fossem quatro grupos. Valores arredondados a dólares; **ainda sem o backend comum da §9.4**.
+
+| Componente mensal | 100 CCU | 1 000 CCU | 10 000 CCU |
+|---|---:|---:|---:|
+| Mundo EC2: nós | 2 | 7 | 63 |
+| Mundo EC2: computação + IPv4 + disco | $224 | $783 | $7 050 |
+| Mundo EC2: saída Internet | $255 | $2 539 | $18 571 |
+| **Mundo autoritativo EC2, subtotal** | **$479** | **$3 322** | **$25 621** |
+| Mundo GameLift: nós | 2 | 13 | 125 |
+| **Mundo autoritativo GameLift, subtotal** | **$136** | **$883** | **$8 486** |
+| Dungeon P2P: nós de relay + replay | 2 + 2 | 2 + 2 | 13 + 16 |
+| Dungeon P2P: computação + IPv4 + disco | $448 | $448 | $3 245 |
+| Dungeon P2P: saída Internet do relay | $123 | $1 291 | $11 092 |
+| Dungeon P2P: S3 e pedidos de replay | $9 | $92 | $919 |
+| **Dungeon P2P + relay + replay integral, subtotal** | **$580** | **$1 830** | **$15 256** |
+| Dungeon autoritativa GameLift: nós | 2 | 8 | 79 |
+| **Dungeon autoritativa GameLift, subtotal** | **$136** | **$543** | **$5 363** |
+
+Volumes mensais de saída a 100/1 000/10 000 CCU: mundo **2 937 / 29 370 / 293 702 GiB**; relay **1 469 / 14 685 / 146 851 GiB**. Este é o motivo de a largura de banda dominar EC2. Os replays geram **36 500 / 365 000 / 3 650 000 runs/mês**, com cerca de **63 / 626 / 6 259 GiB** de logs canónicos retidos em regime estável de 7 dias. Os requests de blocos custam mais do que o armazenamento nesta hipótese.
+
+A coluna GameLift não cobra o mesmo tráfego uma segunda vez. Conta instâncias e IPv4; armazenamento adicional fora da franquia/frota, integração/gestão e tráfego de outros serviços permanecem separados. Uma dungeon autoritativa não precisa do replay integral para provar um resultado que o servidor já calculou, embora possa guardar telemetria.
+
+**Resultado desta hipótese:** P2P reduz custo face ao mundo em EC2 a partir de certa escala, mas as dungeons autoritativas elegíveis em GameLift ficam substancialmente abaixo de P2P + relay EC2. Não é uma prova final de capacidade nem razão para implementar já a alternativa: é motivo para levar ambas ao ensaio económico da fase 6.
+
+### 9.4 Backend comum e total do produto híbrido
+
+CCU não determina o preço de login: assumir **MAU =20 × CCU médio**, equivalente a 36,5 h de jogo/mês por utilizador nesta conta. Resultam **2 000 /20 000 /200 000 MAU**. Cognito Lite seria **$0 /$55 /$955**: no último caso, `90 000 ×0,0055 +100 000 ×0,0046`. Com Essentials ou mais utilizadores ocasionais o valor muda. [S14]
+
+| Backend comum a ambos os modelos | 100 CCU | 1 000 CCU | 10 000 CCU |
+|---|---:|---:|---:|
+| API/party/chat em Fargate | 2× (0,5 vCPU/1 GiB): ~$29 | 4× (1 vCPU/2 GiB): ~$115 | 8× (2 vCPU/4 GiB): ~$461 |
+| RDS Multi-AZ, disco e backups: **reserva**, não cotação | $100–200 | $250–500 | $700–1 600 |
+| ALB: hipótese de 1/4/14 LCU médios | ~$22 | ~$40 | ~$98 |
+| IPv4: 2 do ALB + um por task pública | ~$15 | ~$22 | ~$37 |
+| Logs/métricas, SQS, KMS, segredos, emails, checkpoints, rede interna/endpoints e eventual Valkey: **reserva** | $50–100 | $150–350 | $500–1 200 |
+| Cognito Lite | $0 | $55 | $955 |
+| **Backend comum arredondado para orçamento** | **$220–370** | **$640–1 100** | **$2 800–4 400** |
+
+Reservas de RDS não derivam só de CCU: dependem de escritas económicas, tamanho das fichas/inventários, índices e retenção. Referências de configuração: t4g.medium Multi-AZ no escalão pequeno, m7g.large no intermédio e m7g.xlarge no maior, sujeitos a teste; os intervalos não garantem que esses tamanhos bastem. A reserva auxiliar limita logging e admite fanout gerido; NAT Gateway, se escolhido, tem de ser recalculado por hora/GB e pode excedê-la.
+
+Exemplo de produto com **60% do tempo no mundo e 40% em dungeons**, todos na mesma região. Recalcular os nós com `0,6 C` e `0,4 C`, preservando os mínimos; não multiplicar simplesmente o total da tabela anterior por 0,4. Comparação com as mesmas atividades e backend:
+
+| Total mensal de referência | 100 CCU | 1 000 CCU | 10 000 CCU |
+|---|---:|---:|---:|
+| Mundo GameLift + dungeons P2P/relay/replay: só gameplay | $631 | $1 547 | $11 726 |
+| **Híbrido pedido, com backend comum** | **$850–1 000** | **$2 190–2 650** | **$14 530–16 130** |
+| Mundo GameLift + dungeons autoritativas GameLift: só gameplay | $272 | $815 | $7 264 |
+| **Alternativa toda autoritativa, com backend comum** | **$490–640** | **$1 450–1 920** | **$10 060–11 670** |
+
+Estes totais mantêm quatro pools mínimos no híbrido (mundo, relay, replay e API), o que pesa especialmente a 100 CCU. Num piloto sem promessa de HA, co-localizar serviços, reduzir tamanhos ou desligar workers ociosos pode baixar muito o fixo, mas muda isolamento, disponibilidade e tempo de fila. Não confundir esse piloto com a configuração da tabela.
+
+### 9.5 Sensibilidades e o que medir antes da escolha
+
+- **CPU real:** se Sim custar 2 ms/tick em vez de 0,25 ms, replay exige **8× o trabalho**. A 10 000 CCU de dungeon, passa de 16 para cerca de **125 workers** com esta ocupação. O autoritativo também sofre, mas não tem a fila de recompensas; ambos precisam de novo packing.
+- **Concentração de população:** canais pouco cheios e regiões adicionais reduzem ocupação. Uma zona a 80 jogadores não pode ser empacotada com outra só porque o total de CCU desceu; é preciso handoff/draining. O número efetivo de zonas ativas pode dominar a fórmula.
+- **Banda:** mundo denso de 32 kB/s aumenta os bytes em **2,67×**; party de 5 com 8 kB/s aumenta relay em **1,33×**. Recalcular os escalões, sem multiplicar o preço final de transferência linearmente.
+- **Logs:** upload de todos os logs completos, snapshots frequentes, retenção 30 dias para tudo ou compressão ineficaz alteram S3/requests. Compressão pode poupar bytes, mas não deve ser uma condição secreta para o orçamento caber.
+- **Picos e falhas:** com CCU médio 30% do pico, integrar a curva horária, mínimos e folga; não multiplicar todos os serviços por 0,3. Para resistir à perda de uma AZ sem reduzir admissão, reservar capacidade adicional além dos 20% de ocupação e pagar essa capacidade.
+- **Spot:** comparar depois com histórico regional e interrupções reais. Workers podem retomar; zonas persistentes e relay de runs ativas não devem depender só de Spot.
+- **Escopo não incluído:** CDN/downloads/patches do jogo, voz, suporte premium, moderação humana, impostos, réplica ativa noutra região, armazenamento prolongado de dumps e mitigação DDoS paga. NLB/Global Accelerator/Player Gateway não foram incluídos como se já estivessem contratados.
+
+**Critério proposto:** conservar o protótipo híbrido autorizado, mas só assumir P2P como caminho de produção se o custo medido completo (relay + replay integral + operação) justificar os compromissos de experiência e segurança. A eventual mudança para dungeons autoritativas é uma decisão do utilizador (§12), não uma alteração de código nesta tarefa.
+
+## 10. Reaproveitamento ficheiro a ficheiro
+
+Inventário lido na retoma, relativo a **`Assets/KonoSuba/Netcode/`**. **Manter** significa preservar responsabilidade e regras úteis; **adaptar** exige o trabalho indicado; **deitar fora do caminho MMO** significa excluir a implementação desse caminho e conservar o histórico/banco de teste quando útil. **Esta tabela não executa remoções nem altera código, pacotes ou assets.**
+
+A simulação já tem **8 lutadores e 16 projéteis**, IA determinística e duas habilidades. A sessão/transporte continua de **dois peers**. Não confundir aumentar entidades de Sim com já ter rede para cinco jogadores, nem confundir os limites atuais com os alvos de 37 corpos/64 projéteis da §5.
+
+### 10.1 Sim/
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Sim/AnimLab.Netcode.Sim.asmdef` | Manter | Fronteira sem Unity; partilhar os mesmos fontes através de biblioteca/projeto .NET compatível, sem referenciar assembly Unity no servidor |
+| `Sim/Fix.cs` | Manter | Aritmética Q32.32 já sem BigInteger; testar overflow/divisão/raiz e igualdade em Mono, IL2CPP, CoreCLR x64/ARM64. Não voltar a otimizar sem benchmark |
+| `Sim/FixTables.cs` | Manter | Tabelas determinísticas canónicas; incluir conteúdo e gerador/versionamento no hash das regras |
+| `Sim/FixVec3.cs` | Manter | Vetores determinísticos; rever limites de coordenadas/normalização para mapas maiores |
+| `Sim/State.cs` | Adaptar | Substituir P0..P7/Q0..Q15 e IDs de slot por entidades/gerações e capacidades aprovadas; cópias profundas/pré-alocadas. Separar config imutável de estado vivo; preservar equipas, IA, mana, cooldowns e status existentes |
+| `Sim/StateCodec.cs` | Adaptar | Conservar serialização explícita e testes de round-trip; versão atual 6. Separar snapshot completo, delta de rede e arquivo de replay; limites de tamanho, compatibilidade e SHA-256 para segurança |
+| `Sim/World.cs` | Adaptar | Reaproveitar tick/movimento/ordem e entrada por array; retirar arena fixa como única geometria, acrescentar colisão de mapa/AOI/broadphase e execução de zona. Separar hit-stop global de dungeon da regra por participantes do mundo |
+| `Sim/CombatRules.cs` | Adaptar | Preservar estilos, janelas e mitigação; substituir StruckMask limitada por conjunto de hits por ataque/EntityId, rever equipas e aplicar consulta histórica só no executor autoritativo. Não fazer rewind global de todos |
+| `Sim/SwordData.cs` | Manter | Dados de golpes e geometria já partilhados com apresentação; versionar conteúdo e preservar testes de paridade. Não duplicar tabelas divergentes no servidor |
+| `Sim/BotInputs.cs` | Adaptar | Manter cargas determinísticas de regressão; retirar escolhas fixas de adversário 0/1 e criar cenários de N entidades/players. Bots não substituem teste de input humano |
+| `Sim/DuelistBrain.cs` | Adaptar | Reaproveitar porte e AiState/RNG já em snapshot; generalizar alvo, threat, navegação, boss FSM e participação. Não refazer o porte inteiro do MonoBehaviour |
+| `Sim/Abilities.cs` | Adaptar | Reaproveitar Dash/Bola de Fogo, projéteis, mana/status; completar Water/Wind/Lightning/Thunder/Kirin/Summon, colisão, equipas e efeitos da Bíblia. Configuração vem de conteúdo backend, não de componentes da cena enviados pelo host |
+| `Sim/RulesFingerprint.cs` | Adaptar | Manter a deteção rápida de versões, mas acrescentar manifestos SHA-256 de binário/regras/mapa/dados; o fingerprint atual não autentica um cliente modificado |
+
+Não aplicar `StateCodec.Encode` com alocação em cada tick para copiar todos os snapshots. FNV/checksum continuam úteis para diagnóstico, separados do hash/assinatura de evidência. Um input de 11 B ou um codec novo só entra numa run com manifesto de versão correspondente.
+
+### 10.2 Rollback/
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Rollback/AnimLab.Netcode.Rollback.asmdef` | Manter | Núcleo sem Unity; servidor de mundo não depende da sessão P2P para ser autoritativo |
+| `Rollback/RollbackSession.cs` | Adaptar | Histórico/restauro/primeiro tick sujo reutilizáveis; substituir local/remote por streams de 2–5 peers, confirmação por watermark, input próprio canónico corrigível pelo relay e budget total por frame |
+| `Rollback/RollbackPeer.cs` | Adaptar | Conservar validação integral antes de aplicar pacote e diagnóstico; substituir wire de um adversário, redundância fixa de 24 e 1 400 B por protocolo relay ≤1 200 B, roster/época e recuperação seletiva |
+| `Rollback/MatchHandshake.cs` | Adaptar | Manter banco local de compatibilidade. **Deitar fora do MMO a aceitação de stats, IA, seed e AbilityTable escolhidos pelos clientes/host**; substituir por RunManifest/estado inicial assinados pelo backend |
+| `Rollback/Packing.cs` | Adaptar | Conservar compressão com limite de descompressão; acrescentar limites por mensagem e transporte HTTPS de estado grande. Comprimir não garante caber num datagrama nem evita fragmentação |
+| `Rollback/LoopbackMatch.cs` | Adaptar | Conservar cenário A/B como regressão e criar harness de N peers através de relay simulado; cobrir lag/perda/desconexão/correção do próprio input |
+| `Rollback/InputLatch.cs` | Adaptar | Manter retenção/consumo de flancos e Cast; estender a charge/release/ações InputV2 e limpar flancos na previsão sem perder ações entre frames |
+| `Rollback/EventLedger.cs` | Adaptar | Manter objetivo de não repetir VFX; deduplicação atual por tipo/origem/alvo em ±8 ticks pode suprimir eventos legítimos distintos. Usar ActionInstanceId/ordinal e ciclo previsto/confirmado/cancelado |
+
+A sessão de mundo deve ter um controlador próprio de previsão/reconciliação local. Reaproveitar snapshots/regras não obriga a executar o RollbackSession da dungeon contra todos os habitantes de uma zona.
+
+### 10.3 Transport/
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Transport/AnimLab.Netcode.Transport.asmdef` | Manter | Fronteira sem Unity e sem dependência Steam |
+| `Transport/ITransport.cs` | Adaptar | Conservar interfaces de datagrama/ciclo/contadores; acrescentar identidade de ligação, canal e estatísticas para servidor/relay multi-cliente. Não inferir identidade só do endereço |
+| `Transport/Loopback.cs` | Adaptar | Manter atraso **de uma via**, jitter/perda e seed; suportar N endpoints, reordenação, bursts, suspensão e falha de relay sem sockets reais |
+| `Transport/UdpTransport.cs` | Adaptar | Manter sockets não bloqueantes e parsing para localhost/LAN; produção substitui canal cru por transporte autenticado/encriptado, quotas e multiplexagem de clientes. Não expor o atual host direto como gateway MMO |
+| `Transport/DatagramSession.cs` | Adaptar | Conservar handshake idempotente/keepalive/fecho como referência; substituir host/join de um adversário e tokens atuais por tickets backend, AEAD/anti-replay, épocas, roster e erros de admissão. Não é segurança MMO pronta |
+
+Não deitar fora `DatagramSession` só por também ser usado em Steam: é uma extração comum ao UDP. A dependência a retirar é a autoridade/confiança do duelo, não todo o trabalho de timeout e idempotência.
+
+### 10.4 Steam/
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Steam/AnimLab.Netcode.Steam.asmdef` | Deitar fora do caminho MMO | Isolar do conjunto de assemblies de runtime MMO; não apagar nesta tarefa |
+| `Steam/SteamClient.cs` | Deitar fora do caminho MMO | Conta, party e descoberta passam para backend; conservar como banco legado se necessário |
+| `Steam/SteamLobbyInfo.cs` | Deitar fora do caminho MMO | Lobbies de dois lugares/App 480/metadados Steam não são o catálogo de dungeons. Reaproveitar apenas a ideia de recusar versões incompatíveis |
+| `Steam/SteamTransport.cs` | Deitar fora do caminho MMO | SDR/Steam Networking Sockets não participa no relay AWS pedido; não continuar a fase Steam como requisito MMO |
+| `Steam/SteamVerification.cs` | Deitar fora do caminho MMO | Socket pair nativo fica como evidência legada; substituí-lo por prova real do transporte AWS |
+
+Eventual distribuição/login pela loja Steam é independente. Retirar pacotes/DLLs/defines e mudar builds é trabalho futuro, só após verificar dependentes fora desta pasta; o documento não autoriza apagar a experiência atual nem os seus ficheiros.
+
+### 10.5 Unity/
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Unity/AnimLab.Netcode.Unity.asmdef` | Adaptar | Remover dependência obrigatória de Steam na variante MMO; referenciar os contratos/apresentação partilhados |
+| `Unity/InputSampling.cs` | Adaptar | Preservar quantização de movimento/yaw e ligação a GameInput; emitir InputV2, alvo por ID e charge/release. Keybinds continuam locais |
+| `Unity/Views.cs` | Adaptar | Conservar conversões/interfaces INetMovement/Combat/Sword/Ability/Brain; múltiplas entidades por ID, pools e separação de eventos preditos/confirmados |
+| `Unity/NetMatch.cs` | Adaptar | Reutilizar aplicação visual, interpolação e hooks de habilidades; separar executores WorldClient e DungeonClient, criação de entidades/AOI e UI de reconexão. Tirar CaptureConfig/CaptureTable da origem de autoridade |
+| `Unity/OnlineConnection.cs` | Adaptar | Preservar ciclo de vida e relógio monotónico NetworkClock; substituir HostAccept/BeginSteam por login, reserva, ticket, endpoint e handoff. Endereço/configuração recebidos do backend |
+| `Unity/OnlineMenu.cs` | Adaptar | Manter Local Test e overlay de diagnóstico num modo de desenvolvimento; fluxo de produto passa a login, personagem, mundo, party e entrada de dungeon. Remover obrigatoriedade de lobbies Steam |
+| `Unity/NetBuildRun.cs` | Adaptar | Conservar harness de executáveis e captura sem input injetado; criar cenários para 2+ clientes, N peers, falhas/reentrada e relatórios por personagem/run |
+| `Unity/ShaderReferences.cs` | Manter | Conservar referências de shaders necessárias à apresentação; só cliente, nunca dependência headless |
+| `Unity/link.xml` | Adaptar | Preservar tipos usados indiretamente e rever stripping IL2CPP dos novos adaptadores; não presumir que um build Mono valida IL2CPP |
+| `Unity/SteamOnline.cs` | Deitar fora do caminho MMO | Substituir coordenação de lobbies/callbacks por serviços; não inicializar Steam ao abrir o menu MMO |
+| `Unity/SteamSmokeRun.cs` | Deitar fora do caminho MMO | Arquivar smoke da App 480; criar cenário AWS/local independente, sem sessão Steam necessária |
+
+Os scripts externos `CapsulePlayer`, `SwordWielder`, `Combatant`, `AbilityBar`, `GameHud`, `CharacterStats` e árvores continuam importantes, mas ficam fora do inventário desta pasta: manter os ganchos de vista e converter persistência/decisão para comandos validados. Não executar os respetivos MonoBehaviours como regras no servidor. O porte atual das habilidades é parcial; não eliminar VFX úteis por ainda faltar a sua regra determinística.
+
+### 10.6 Editor, Resources, Tests e Tools~
+
+| Ficheiro | Destino | Trabalho concreto |
+|---|---|---|
+| `Editor/AnimLab.Netcode.Editor.asmdef` | Adaptar | Separar build do cliente, geração de conteúdo e dependências opcionais Steam |
+| `Editor/NetcodeBuild.cs` | Adaptar | Conservar build e retenção de shaders; retirar verificação/cópia obrigatória de DLLs/App ID Steam na variante MMO. Servidor .NET é produzido fora do build Unity |
+| `Editor/RulesFingerprintGenerator.cs` | Adaptar | Preservar geração reproduzível; manifesto forte inclui dados/mapa além de fontes. Não depender de uma regeneração local não publicada para identificar build de produção |
+| `Editor/SteamEditorLifetime.cs` | Deitar fora do caminho MMO | Lifecycle Steam só no banco legado; novo cliente precisa dos próprios fechos/reloads sem Steam |
+| `Resources/NetcodeShaders.asset` | Manter | Referências visuais atuais; não incluir em worker/verificador |
+| `Tests/AnimLab.Netcode.Tests.asmdef` | Adaptar | Separar testes puros portáveis, testes Unity e integração Steam opcional; falha Steam não deve impedir validar um servidor sem Steam |
+| `Tests/MovementTests.cs` | Adaptar | Manter determinismo, input/codec e restauro; estender N entidades, terreno, limites e novos formatos |
+| `Tests/CombatTests.cs` | Adaptar | Manter fronteiras de parry, guard/clash e paridade; acrescentar multi-alvo/equipa, clocks, histórico de lag compensation e ausência de hit-stop global no mundo |
+| `Tests/AbilityTests.cs` | Adaptar | Preservar Dash/FireBall e rollback com casts; acrescentar cada habilidade/estado, consumo, mapa e replay de conclusão inválida |
+| `Tests/AiTests.cs` | Adaptar | Preservar IA determinística; generalizar mobs/bosses/seed. Substituir “cabe num datagrama” como contrato universal por limites e transferência adequada |
+| `Tests/RollbackTests.cs` | Adaptar | Manter oracle, perda/reordenação, stall e desync; 2–5 peers, stream próprio selado pelo relay, épocas e limite por frame |
+| `Tests/EventTests.cs` | Adaptar | Preservar não duplicação; provar também que dois hits legítimos próximos aparecem e que um resultado invalidado não paga nem emite confirmação final |
+| `Tests/PresentationTests.cs` | Adaptar | Manter restauro offline/quantização e vistas; adicionar previsão vs snapshots, AOI, retorno/reconexão e frames com correção |
+| `Tests/UdpTests.cs` | Adaptar | Manter socket real/handshake e perdas; substituir configs de cliente por manifesto, testar autenticação, tickets repetidos, mais clientes e limites |
+| `Tests/SteamTests.cs` | Deitar fora do caminho MMO | Conservar numa suite legada opcional; casos genéricos de handshake migram para a suite do novo transporte |
+| `Tools~/NetcodeVerifier.csproj` | Adaptar | Base útil sem Unity; atualizar net8.0 para .NET 10 e separar biblioteca, servidor e verifier. Não carregar assemblies Steam/Unity |
+| `Tools~/Program.cs` | Adaptar | Conservar oracle Mono/CoreCLR como modo de regressão; hoje só simula loopback de 10 800 ticks, **não é um serviço de replay de dungeon**. Acrescentar CLI de log/manifesto, código de saída e resultado estruturado |
+| `Tools~/.gitignore` | Manter | Excluir outputs de build/log do código fonte; ajustar só quando os novos projetos existirem |
+
+Cada `.meta` de fonte/assembly/asset e os `.meta` das pastas acompanham o destino do seu objeto; **manter GUIDs** quando o asset é mantido/adaptado, e remover em conjunto apenas numa migração futura aprovada pelo âmbito de implementação. Não gerar identidades novas só por reorganizar ficheiros.
+
+`Tools~/bin/**`, `Tools~/obj/**` e `Tools~/Logs/netcode/coreclr.txt` são outputs/cache/evidência local, não módulos a portar: **deitar fora como dependência/distribuição do servidor novo**, regenerando binários a partir dos fontes e conservando evidência útil no arquivo de testes. Não os apagar nesta tarefa. Os ficheiros gerados no inventário não são prova de que o código atual já foi validado em Linux.
+
+### 10.7 Componentes novos que o reaproveitamento não fornece
+
+Ainda é preciso criar, em fases futuras: host .NET de zona, identidade/posse de entidades, mapa determinístico exportado, AOI e snapshot delta, previsão/reconciliação do mundo, serviço de contas/personagens, transações económicas, coordenador de handoff, relay seguro/admissão temporal/log, sessão N peers, arquivo de versões, workers de validação e observabilidade. O banco existente poupa sobretudo combate, matemática, IA inicial, apresentação e regressões; não equivale a um backend MMO já implementado.
+
+## 11. Fases de implementação com algo para mostrar e validar
+
+Estas são **fases novas desta arquitetura**; não retomam a numeração da antiga fase Steam. Cada fase termina com artefacto observável e um critério de saída. A execução desta tarefa limita-se ao plano; nenhum dos resultados futuros abaixo é apresentado como já demonstrado.
+
+### Fase 1 — mundo mínimo local: .NET headless e 2+ clientes
+
+**Construir:** servidor .NET 10 de consola, sem UnityEngine, a correr Sim a 60 Hz; sala plana e duas personagens, IDs próprios e inputs validados. Cliente Unity faz previsão só do local, reconciliação e interpolação dos outros. Inicialmente aproveitar a capacidade de oito lutadores; sem persistência real ou AWS. A hipótese de transporte seguro de produção pode ser isolada enquanto localhost usa o harness existente.
+
+**Mostrar:** um terminal do servidor e **dois processos de cliente reais**, depois um terceiro; os clientes movem-se, atacam e veem HP/posições decididos pelo mesmo servidor. Gravação dos clientes e trace correlacionado de inputs/snapshots/eventos. Os dados de conta são fixtures declaradas, não login alegadamente concluído.
+
+**Validar para sair:** 10 min de execução com 2 e 3 clientes, mesma autoridade/IDs, ausência de execução duplicada, correção de um movimento inválido e reconexão simples; servidor continua a executar com os clientes desligados. Ensaiar RTT 0/80/150 ms, jitter 20 ms e perda 2% através de emulação controlada, reportando erro de previsão e tick p95/p99. Compilar não substitui esta demonstração.
+
+### Fase 2 — primeira dungeon de grupo com mobs e replay
+
+**Construir:** coordenador/relay **local**, roster fixo e log canónico; generalizar a sessão a 2–5 streams. Começar com **2 jogadores +2 mobs**, depois **3 jogadores +2 mobs** para provar mais de dois peers. Usar DuelistBrain e uma sala simples com objetivo “derrotar todos”; loot/XP num ledger local de teste, entregues só após worker reproduzir todo o log. Primeiro checkpoint/manifesto e relógio vêm do backend local.
+
+Não bloquear o primeiro protótipo por conteúdo de 37 corpos: **5 jogadores +2 mobs =7** cabem no estado atual de oito. Passar para **5+8** só depois de adaptar capacidade, máscaras e IDs; o alvo de 32 mobs vem mais tarde. Dash/Bola de Fogo podem entrar após o combate básico convergir, com as regras existentes identificadas.
+
+**Mostrar:** três clientes a completar uma sala com mobs, fim `Verifying rewards...`, worker .NET a re-simular e uma única recompensa no ledger. Mostrar também uma conclusão fabricada rejeitada e reenvio do mesmo pedido sem duplicar prémios.
+
+**Validar para sair:** 2/3/5 peers, 30 min de inputs reproduzíveis sem desync, correção sob 80/150 ms RTT e 2% perda; hash canónico igual no cliente e worker; rejeitar alteração de stats, troca/omissão de ticks, run/época errados, vitória sem boss morto e replay duplicado. Derrubar um peer e o worker, retomar/repetir sem mudar a recompensa. Medir CPU/tick, CPU/run, bytes/run e fila; usar fixtures locais não prova segurança cloud.
+
+### Fase 3 — conta, personagem, party e handoff persistente
+
+**Construir:** PostgreSQL, identidade de conta (primeiro fixture, depois Cognito de teste), ficha/árvores/loadout/inventário, CharacterOwner, escrow, saga e outbox. Convites/ready check de party; regresso da dungeon enquanto recompensa está pendente e deltas sem substituir a ficha atual.
+
+**Mostrar:** login, escolher personagem, alterar hotbar autorizada, entrar com a party, completar dungeon, regressar ao mundo e receber prémio; reiniciar serviços e ver os mesmos itens/XP. UI em inglês, incluindo mensagens de pendência/falha.
+
+**Validar para sair:** dois pedidos de entrada simultâneos, segundo login, crash antes/depois de Detached, pagamento aplicado antes de crash de notificação, inventário cheio e logout durante a validação. Em todos, **uma só posse e um só pagamento**. Testar restauro de backup e migração de schema; nunca ligar a uma base de produção para estes ensaios.
+
+### Fase 4 — combate de mundo e conteúdo representativo
+
+**Construir:** mapa com colisões/alturas simples, AOI/deltas, IDs arbitrários, conjuntos de hits por ataque e eventos sem colisões. Separar hit-stop do mundo e executar a política de parry/lag compensation da §4. Portar habilidades e efeitos por fatias completas de regra + apresentação, começando pelas duas existentes e seguindo Água/Eletricidade conforme prioridade de design.
+
+**Mostrar:** 8/16/32 entidades em combate; duas gravações sincronizadas de parry/guard/clash sob latência, incluindo um caso rejeitado; entrada/saída da AOI com um projétil/área que continua visível e perigoso quando aplicável. Depois mostrar 5+8 e 5+32 numa dungeon se o orçamento permitir.
+
+**Validar para sair:** replay/restore de cada regra nova, equipas/friendly fire explícitos, HP/recursos iguais, sem dependência PhysX/tempo de frame, sem drops silenciosos de eventos. Comparar L=0 com a política histórica limitada; medir falsos contactos, correções e justiça percebida com jogadores. Obter desempenho no **PC mínimo escolhido**, incluindo frames com até 8 ticks de replay.
+
+### Fase 5 — piloto AWS europeu e falhas reais de ligação
+
+**Construir:** imagem Linux versionada, frota EC2 de teste, relay seguro, S3/SQS, workers, API/RDS/Cognito de teste, tickets/rotação de chaves e métricas. Testar ARM64; manter x64 se não houver equivalência. Configurar orçamento/alertas e limites de admissão antes de cargas prolongadas.
+
+**Mostrar:** grupo em **pelo menos dois PCs físicos em redes domésticas diferentes**, sem Steam e sem abrir portas no router, dungeon completa e recompensa persistente. Mostrar reconexão, worker repetido e retorno ao mundo após falha controlada.
+
+**Validar para sair:** equivalência de replay Windows/Mono/IL2CPP conforme cliente escolhido e Linux/CoreCLR x64/ARM64; rejeição de ticket roubado/repetido/expirado, pacotes adulterados e uploads excessivos. Derrubar zona/relay/worker de teste, recuperar posse e prefixo assinado ou abortar segundo política; reportar RPO/RTO e tempo até recompensa. Ligação loopback ou dois processos no mesmo PC não satisfazem esta fase.
+
+### Fase 6 — comparação económica com carga e decisão de hosting
+
+**Construir:** cenários reproduzíveis e comparáveis: mundo EC2 versus GameLift elegível, e **a mesma dungeon** em P2P+relay+replay e autoritativa GameLift. Ensaiar ocupação real, packing, quotas de instância/SDK e draining. FlexMatch só se houver necessidade demonstrada.
+
+**Mostrar:** dashboard e export de faturação/Calculator com região, versão de regras, duração de ensaio, CPU, memória, pps, bytes/jogador, requests S3, falhas e fila. Apresentar projeção nova para 100/1 000/10 000 CCU com os valores medidos.
+
+**Validar para sair:** uma zona chega a 100 jogadores sintéticos com comportamento representativo e hotspot 32/64/100 sem exceder os limites aceites; depois carga por múltiplas zonas até 1 000 e, por último, 10 000 se existir necessidade/capacidade autorizada para esse ensaio. Bots de rede provam carga do servidor, não renderização/conforto de 100 humanos. Nenhuma capacidade é promovida a promessa comercial só por projeção.
+
+**Decisão ao fechar:** o utilizador escolhe híbrido ou dungeons autoritativas, com diferenças medidas de custo, responsividade, falhas e risco. Esta fase compara; não assume que P2P é automaticamente a opção barata.
+
+### Fase 7 — alpha persistente, operação e expansão controlada
+
+**Construir:** ferramentas mínimas de suporte a runs pendentes, auditoria económica, denúncias/chat, migrações/rollback de deployment, catálogo de builds antigos e testes de recuperação. Conteúdo raro/negociável só com validação integral ou autoridade direta.
+
+**Mostrar:** uma sessão de alpha com jogadores, reconexões e progressão, relatório de incidente ensaiado, restauro isolado de backup e rollout de build nova sem invalidar runs antigas.
+
+**Validar para sair:** soak de 24 h na capacidade escolhida, sem duplicação de item/posse/pagamento; medir taxa de runs pendentes/rejeitadas, desync por build, p95 de fila e recompensa, custo por hora de jogador e regressões visuais. Só expandir população/regiões/conteúdo depois de resolver as causas dos incidentes. Um soak verde não prova ausência de fraude; mantém-se o modelo de ameaça da §7.
+
+## 12. Riscos e decisões em aberto
+
+### 12.1 Riscos técnicos e de produto
+
+| Risco | Consequência concreta | Contenção / evidência exigida |
+|---|---|---|
+| Determinismo difere entre runtime/CPU/build | Grupo vê vitória e worker recusa; pagamentos ficam pendentes sem culpa demonstrada | Matriz Mono/IL2CPP/CoreCLR x64/ARM64 com logs idênticos, primeiro tick divergente e pacote antigo preservado |
+| Escalar slots fixos para entidades/mapas | IDs, máscaras, snapshots ou eventos deixam de representar o combate corretamente | Migrar limites explicitamente; casos multi-hit, spawns, despawns e restauro. Oito lutadores não equivalem a uma zona MMO |
+| IA/habilidades só parcialmente portadas | Re-simulação não reproduz o que a imagem sugere; recompensas deixam de ser demonstráveis | Uma fatia completa por habilidade, com regra, input, snapshot, apresentação e replay; excluir conteúdo incompleto de runs com prémios |
+| Hit-stop global atual | Uma troca entre dois jogadores congela todos os habitantes/projéteis | Separar política de mundo e dungeon, decidir relógios e mostrar combate com espectadores antes de aceitar a regra |
+| Party lenta ou longe do relay | Stalls afetam todos; reconexão pode obrigar a replay de dezenas de segundos | Admissão por pior ligação do grupo, delay 2–4 ticks, quotas de pausa e alternativa autoritativa para conteúdo inadequado |
+| Replay integral mais caro/lento do que o esperado | Recompensas atrasam; economia acumula runs pendentes; a poupança desaparece | Medir CPU-run e custo completo, validação incremental confiável, reserva de workers, DLQ e limites de novas runs |
+| Conluio/bots/informação revelada em P2P | Runs legalmente reproduzíveis podem ser automatizadas ou beneficiar de informação extra | Aceitar limite no PvE privado ou escolher autoritativo; não vender replay como prova de input humano ou segredo de boss |
+| Cliente escolhe ficha/mapa/seed | Stats, mobs e consumos falsos geram conclusão aparentemente válida | Manifesto e estado inicial backend, conteúdo versionado, seed de loot secreta e rejeição de divergência de versão |
+| Falha no handoff ou pagamento repetido | Duas cópias da personagem ou criação/duplicação de itens | Lease com fencing por época, transações, escrow, unicidade e fault injection antes/depois de cada transição |
+| Falha de relay/log/chave delegada | Perda ou fabricação de cronologia confiável | Upload/checkpoints, recibos em peers, delegação curta, época única, recuperação de prefixo e investigação de compromisso; não confiar em maioria |
+| Latência vs parry de 0,2 s | Defesa parece válida localmente e chega tarde ao servidor | Exibir resultados confirmados, testar fronteiras e telegraphs; escolher compromissos de design sem alargar janelas em segredo |
+| População concentrada e amplificação de efeitos | P99 ultrapassa 16,67 ms; AOI deixa de caber na banda e o cliente cai de FPS | Limites por área/conteúdo, broadphase, hotspots e PC mínimo reais. Não esconder ameaças que continuam a causar dano |
+| Preços/quotas/região ou condições GameLift mudam | Estimativa deixa de corresponder à fatura ou à disponibilidade | Recalcular na região escolhida com data/export, rever elegibilidade de bandwidth e pedir capacidade antes do lançamento |
+| Catástrofe regional/erro lógico de dados | Multi-AZ não evita toda a perda de dados ou downtime | PITR, restauro isolado, política de compensação e decisão explícita sobre backup/replicação noutra região |
+
+Uma divergência isolada não justifica ban automático. Uma fila indisponível não justifica pagar uma alegação sem verificar. Definir desde a alpha quem resolve `Run under review`, prazos de suporte e compensações de falha de infraestrutura; caso contrário, o custo técnico passa a custo de confiança do jogador.
+
+### 12.2 Escolhas para o utilizador
+
+As recomendações abaixo são **propostas, não decisões já aprovadas**. Servem para escolher antes de cada fase dependente; não impedem concluir este plano.
+
+| ID | Escolha | Recomendação inicial | Alternativa e impacto |
+|---|---|---|---|
+| D01 | Dungeons de produção: P2P ou autoridade direta? | Fazer os dois protótipos comparáveis e decidir na fase 6; manter o híbrido como hipótese pedida | Autoritativo GameLift pode baixar custo e eliminar a espera por prova posterior; exige sessão de combate no servidor e reconciliação |
+| D02 | Garantia de recompensa | Replay integral de todas as runs que dão progresso | Amostragem aceita fraude não verificada; só faz sentido com mudança explícita da garantia/economia |
+| D03 | Política de parry do mundo | Autoridade atual, sem guarda retroativa; tolerância de quantização e telegraphs conforme §4 | Janela de contacto pendente/rollback de ilha dá outro compromisso de atraso e complexidade; requer demonstração antes de escolher |
+| D04 | Forma do mundo e lotação | Zonas com transições explícitas, alvo inicial 100 jogadores e limite de admissão de 80 | Mundo sem costuras/cercos muito maiores altera particionamento, testes, banda e escopo; não está incluído no MVP |
+| D05 | Região de lançamento e público | Uma região europeia, Irlanda como ponto inicial de comparação; medir Portugal/mercados alvo | Espanha remota GameLift ou Frankfurt conforme RTT; múltiplas regiões duplicam fixos e exigem residência/transferência de personagem |
+| D06 | Plataforma/hardware mínimo | Escolher PC mínimo e build Unity/IL2CPP alvo antes de aceitar budget de rollback | Suportar máquinas muito fracas/mobile/consolas muda CPU, memória, criptografia e validação; ainda não há prova neste plano |
+| D07 | Recompensas pendentes e reentrada | Voltar ao mundo, bloquear outra dungeon enquanto a anterior estiver pendente; alvo p95 ≤60 s | Aceitar mais runs simultaneamente aumenta reservas/sagas; esperar fora do mundo piora experiência; pagar provisoriamente enfraquece a economia |
+| D08 | Saída/AFK/consumos e falha de infraestrutura | Direitos por checkpoint verificado, escrow e sem cura/cooldown grátis no regresso | Definir morte/perda de entrada/consumíveis, taxa mínima de contribuição e compensação de falha. Os valores finais precisam de design |
+| D09 | Friendly fire, body-block e hit-stop | Sem body-block social; mundo congela só participantes; política PvE de equipa explícita | Preservar friendly fire/global hit-stop na dungeon muda IA/ataques, replay e sensação; não inferir regra só de um TeamId |
+| D10 | Economia de loot e informação escondida | Conteúdo privado cooperativo no MVP, sem recompensa competitiva P2P | Loot negociável muito valioso, rankings ou segredo de bosses reforçam a preferência por autoritativo e exigem auditoria/limites económicos |
+| D11 | Contas e fidelidade da ficha | Cognito Lite/email, uma posse por personagem, árvores/hotbar/inventário validados no backend | Essentials/passkeys, vinculação Steam e várias sessões têm UX, custo e regras de recuperação adicionais |
+| D12 | Orçamento/HA e metas de recuperação | Distinguir piloto barato de produção em duas AZ; alertas e limites por ambiente | Garantir operação após perda de AZ/região exige reserva e recuperação adicionais; a margem atual não é um SLA |
+
+Decisões de conteúdo ainda necessárias: regras finais de Static/Grounded/Asphyxia/Burning, stacking, duração/letalidade e relógio durante hit-stop; validade/consentimento de Domain Expansion; prioridade das habilidades por portar; e limites de mapa/água/navegação. Registar cada escolha em revisão de conteúdo para que não mude o resultado de uma run já iniciada.
+
+## 13. Fontes e referências
+
+Consulta pública em **31/10/2026**, salvo a data original identificada. Tarifas e capacidades propostas neste plano não são resultados de medição. Páginas com preços dinâmicos podem mostrar outra região/valor; a §9 distingue preços de referência, estimativas próprias e o que falta cotar na Europa.
+
+- **[S1] AWS — GameLift Servers pricing:** [página principal](https://aws.amazon.com/gamelift/servers/pricing/) e [tabela explícita da versão chinesa](https://aws.amazon.com/cn/gamelift/servers/pricing/). A tabela identifica Ohio e c6g.large Linux a $0,088/h; não é preço para a região China nem para Irlanda.
+- **[S2] AWS — bandwidth incluída em GameLift:** [release notes, 15/06/2026](https://docs.aws.amazon.com/gameliftservers/latest/developerguide/release-notes.html) e [anúncio de 16/06/2026](https://aws.amazon.com/blogs/gametech/free-network-bandwidth-amazon-gamelift-servers-is-here-yes-really/). Instâncias elegíveis de geração 6 ou superior; conferir condições antes de contratar.
+- **[S3] Microsoft — [.NET Support Policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core)** e [ciclo de vida](https://learn.microsoft.com/en-ie/lifecycle/products/microsoft-net-and-net-core). Suporte .NET 10 até 14/11/2028 e .NET 8 até 10/11/2026, segundo a página consultada.
+- **[S4] Valve — [implementação de lag compensation no Source SDK 2013](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/game/server/player_lagcompensation.cpp)**. Fonte primária para histórico/rewind limitado; não demonstra a política melee/parry específica proposta para AnimLab.
+- **[S5] Unity — [Netcode for Entities: prediction](https://docs.unity3d.com/Packages/com.unity.netcode@1.5/manual/prediction.html)**. Referência de previsão/re-simulação e do seu custo; usar o núcleo próprio não implica adotar este pacote.
+- **[S6] New World — [Upgraded Combat and Animation System Deep Dive, 16/02/2024](https://www.newworld.com/en-us/news/articles/upgraded-combat-and-animation-system-deep-dive)**. Otimização/escalabilidade do sistema de combate e animação.
+- **[S7] Throne and Liberty — [Update 4.12.0, 16/09/2026](https://www.playthroneandliberty.com/fr-fr/news/articles/update-4-12-0)**. Página oficial consultada, com texto de patch em inglês; regra de Iron Point Parry/Fury Attack em 0,5 s.
+- **[S8] Lost Ark — [Academy: Etiquette with Saintone & ZealsAmbitions](https://www.playlostark.com/en-us/news/articles/lost-ark-academy-etiquette)**. Counters, posição frontal, comunicação e legibilidade de telegraphs.
+- **[S9] Black Desert — [Patch Notes, 19/03/2026](https://www.naeu.playblackdesert.com/en-US/News/Detail?countryType=en-US&groupContentNo=9853)**. Correções de Forward Guard e duração de Super Armor; não revela o protocolo interno.
+- **[S10] netcode — [repositório de referência](https://github.com/mas-bandwidth/netcode)** e [especificação do protocolo](https://github.com/mas-bandwidth/netcode/blob/main/STANDARD.md). Transporte UDP client/server, tokens de ligação e proteção de pacotes. Exigir prova de binding/licença nas plataformas alvo.
+- **[S11] AWS — [EC2 On-Demand pricing](https://aws.amazon.com/ec2/pricing/on-demand/)**, [tabela pública de escalões de transferência US East](https://aws.amazon.com/ec2/pricing/on-demand-backup/) e [exemplo AWS de c7g.xlarge em N. Virginia](https://aws.amazon.com/blogs/big-data/perform-amazon-kinesis-load-testing-with-locust/). O exemplo de computação é histórico e indicativo; a consulta atual não devolveu todas as tarifas regionais dinâmicas.
+- **[S12] AWS — [Fargate pricing](https://aws.amazon.com/fargate/pricing/)**. Exemplo Linux/ARM em N. Virginia, CPU/memória por segundo; não inclui automaticamente rede/ALB/IPv4.
+- **[S13] AWS — [RDS for PostgreSQL pricing](https://aws.amazon.com/rds/postgresql/pricing/)**. Fatores de instância, implantação Multi-AZ, armazenamento, créditos e backups. Os intervalos da §9 são reservas do plano, não cotações extraídas desta página.
+- **[S14] AWS — [Cognito pricing](https://aws.amazon.com/cognito/pricing/)**. Lite/Essentials/Plus, MAU e diferenças de login direto/social versus federação empresarial; emails/SMS e funcionalidades adicionais têm cobrança própria.
+- **[S15] AWS — [S3 pricing](https://aws.amazon.com/s3/pricing/)** e [exemplo oficial de custos com S3 Standard/PUT/GET](https://docs.aws.amazon.com/solutions/latest/automated-security-response-on-aws/cost.html). Tarifas de referência usadas no modelo de logs.
+- **[S16] AWS — [Elastic Load Balancing pricing](https://aws.amazon.com/elasticloadbalancing/pricing/)**. Exemplos ALB US East e dimensões LCU; ALB não substitui relay UDP.
+- **[S17] AWS — [VPC pricing](https://aws.amazon.com/vpc/pricing/)**. IPv4 público, NAT e outros fatores de rede; preço de IPv4 considerado separadamente da computação.
+- **[S18] AWS — [EBS pricing](https://aws.amazon.com/ebs/pricing/)** e [comparação gp2/gp3 em N. Virginia](https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-plan-storage-compare-volume-types.html). Disco EC2 gp3; não é a tabela de storage RDS.
+- **[S19] AWS — [CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/)**. Ingestão/retenção de logs, métricas e alarmes; fundamento para limitar telemetria e reservar custo auxiliar.
+- **[S20] AWS — [SQS pricing](https://aws.amazon.com/sqs/pricing/)**. Pedidos/payload e fatores de transferência; entregar um job mais de uma vez exige idempotência.
+- **[S21] AWS — [KMS pricing](https://aws.amazon.com/kms/pricing/)**. Chaves e operações; não fazer uma chamada KMS por input ou recibo de cada segundo.
+- **[S22] AWS — [GameLift Servers service locations](https://docs.aws.amazon.com/gameliftservers/latest/developerguide/gamelift-regions.html)**. Distingue Home Region, localizações remotas e disponibilidade de filas/FlexMatch/player gateway.
+- **[S23] AWS — [GameLift endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/gamelift.html)** e [CreatePlayerSessions](https://docs.aws.amazon.com/gameliftservers/latest/apireference/API_CreatePlayerSessions.html). Limites de processos e jogadores por sessão, separados de capacidade medida.
+- **[S24] AWS — [GameLift FAQ/FlexMatch](https://aws.amazon.com/gamelift/servers/faqs/)** e [guia FlexMatch](https://docs.aws.amazon.com/gameliftservers/latest/flexmatchguide/match-intro.html). Modo standalone versus integrado; a fila própria do plano não pressupõe FlexMatch gratuito.
+- **[S25] AWS — [opções de arquitetura e capacidade ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-configuration.html)**. Distinção entre capacidade EC2/Fargate e operação dos serviços.
+- **[S26] AWS — [Pricing Calculator](https://calculator.aws/)** e [guia de estimativas GameLift](https://docs.aws.amazon.com/gameliftservers/latest/developerguide/gamelift-calculator.html). Recalcular SKU/região/ocupação com resultados das fases de carga antes de aprovar orçamento.
+
+Referências locais efetivamente consultadas:
+
+- [Brief original](../Logs/cap/sol_mmo_brief.md): âmbito do plano híbrido, garantia de recompensa e cancelamento da fase Steam para o MMO.
+- [Bíblia do jogo](Biblia.md): elementos, estados e poderes; distinguir intenção de design de regra implementada.
+- [Plano anterior de rollback](Netcode_Rollback.md) e [progresso histórico](Netcode_Progress.md): banco 1v1, evidência histórica e atualização parcial para IA/habilidades/N lutadores.
+- [Código atual de netcode](../Assets/KonoSuba/Netcode/): contratos e inventário da §10. A leitura do código identifica capacidades/restrições; não substitui runtime, build, teste em dois PCs ou medição cloud.

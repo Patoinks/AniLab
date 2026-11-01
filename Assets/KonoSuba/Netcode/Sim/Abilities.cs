@@ -25,7 +25,7 @@ namespace AnimLab.Netcode.Sim
         public Fix Mana(AbilityId a) => a == AbilityId.Dash ? DashMana : a == AbilityId.FireBall ? FireMana : Fix.Zero;
         public Fix Cooldown(AbilityId a) => a == AbilityId.Dash ? DashCooldown : a == AbilityId.FireBall ? FireCooldown : Fix.Zero;
         /// <summary>Habilidades já portadas para a simulação (as outras ainda não lançam online).</summary>
-        public static bool Simulated(AbilityId a) => a == AbilityId.Dash || a == AbilityId.FireBall;
+        public static bool Simulated(AbilityId a) => World.HasRule(a);
     }
 
     /// <summary>Projétil em voo (bola de fogo, …). Posições fixas no estado: Q0..Q15.</summary>
@@ -42,50 +42,65 @@ namespace AnimLab.Netcode.Sim
     {
         static readonly Fix Edge = Fix.Ratio(40,100);
 
-        /// <summary>Tecla da hotbar carregada neste tick: gasta mana, arma a recarga e lança.</summary>
+        // Regras das habilidades, registadas por AbilityId (ver Docs/Online_Rules.md):
+        //   Cast: no lançamento (validações, criação de projétil/efeito); devolve false se não lançou (sem gastar).
+        //   Tick: cada tick de um projétil desse tipo (voo, colisões, impacto).
+        delegate bool CastRule(ref MatchState s,int id,PlayerInput input,EventBuffer events);
+        delegate void TickRule(ref MatchState s,int slot,EventBuffer events);
+        static readonly CastRule[] castRules=new CastRule[16];
+        static readonly TickRule[] tickRules=new TickRule[16];
+        static void Register(AbilityId a,CastRule cast,TickRule tick=null) { castRules[(int)a]=cast; tickRules[(int)a]=tick; }
+        static World()
+        {
+            Register(AbilityId.Dash,CastDash);
+            Register(AbilityId.FireBall,CastFireBall,TickFireBall);
+        }
+        public static bool HasRule(AbilityId a) => (int)a<castRules.Length && castRules[(int)a]!=null;
+
+        /// <summary>Habilidade pedida neste tick: tem de ser conhecida; gasta mana, arma a recarga (por habilidade) e lança.</summary>
         static void TickAbility(ref MatchState s,int id,PlayerInput input,EventBuffer events)
         {
-            if(input.Cast==0) return;
-            ref PlayerState p=ref MatchState.Player(ref s,id);
-            AbilityId a=p.Config.Slot(input.Cast-1);
+            var a=(AbilityId)input.Cast;
             if(a==AbilityId.None || !AbilityTable.Simulated(a)) return;
+            ref PlayerState p=ref MatchState.Player(ref s,id);
+            if(!p.Config.Knows(a)) return;
             Fix now=Fix.FromInt(s.Tick)*Dt, mana=s.Abilities.Mana(a);
-            if(p.Mana<mana || now<p.CooldownUntil(input.Cast-1)) return;
+            if(p.Mana<mana || now<p.CooldownUntil((int)a-1)) return;
             if(!Cast(ref s,id,a,input,events)) return;
             ref PlayerState q=ref MatchState.Player(ref s,id);
             q.Mana-=mana;
-            q.SetCooldownUntil(input.Cast-1,now+s.Abilities.Cooldown(a)*(1-q.Config.CooldownReduction));
+            q.SetCooldownUntil((int)a-1,now+s.Abilities.Cooldown(a)*(1-q.Config.CooldownReduction));
         }
 
-        static bool Cast(ref MatchState s,int id,AbilityId a,PlayerInput input,EventBuffer events)
+        static bool Cast(ref MatchState s,int id,AbilityId a,PlayerInput input,EventBuffer events) =>
+            castRules[(int)a]!=null && castRules[(int)a](ref s,id,input,events);
+
+        // ------------------------------------------------------------------ Dash
+        // Na direção de WASD (ou para a frente, se parado); arranca no máximo e trava no fim.
+        static bool CastDash(ref MatchState s,int id,PlayerInput input,EventBuffer events)
         {
             ref PlayerState p=ref MatchState.Player(ref s,id);
-            switch(a)
-            {
-                case AbilityId.Dash:
-                {
-                    // Na direção de WASD (ou para a frente, se parado); arranca no máximo e trava no fim.
-                    FixVec3 wish=input.Wish;
-                    FixVec3 dir=wish.LengthSquared>F(1)?wish.Normalized:p.Forward.Flat.Normalized;
-                    if(dir.LengthSquared<F(1)) return false;
-                    p.DashDir=dir; p.DashTime=0; p.Dashing=true; p.Yaw=Fix.Atan2(dir.X,dir.Z);
-                    events.Add(s.Tick,EventKind.Cast,id,id,p.Position,dir,ability:a);
-                    return true;
-                }
-                case AbilityId.FireBall:
-                {
-                    int slot=FreeProjectile(ref s);
-                    if(slot<0) return false;
-                    int target=input.TargetSlot>0?TargetOf(ref s,id,input):-1;
-                    ref ProjectileState b=ref MatchState.Projectile(ref s,slot);
-                    b=new ProjectileState { Kind=a,Owner=(sbyte)id,Target=(sbyte)target,Aim=input.Aim,
-                        Formation=Fix.Max(F(5),s.Abilities.FireFormation/Fix.Max(F(10),p.Config.CastSpeed)),Power=p.Config.SpellPower };
-                    b.Position=HoldPoint(ref s,id);
-                    events.Add(s.Tick,EventKind.Cast,id,slot,b.Position,p.Forward,ability:a);
-                    return true;
-                }
-            }
-            return false;
+            FixVec3 wish=input.Wish;
+            FixVec3 dir=wish.LengthSquared>F(1)?wish.Normalized:p.Forward.Flat.Normalized;
+            if(dir.LengthSquared<F(1)) return false;
+            p.DashDir=dir; p.DashTime=0; p.Dashing=true; p.Yaw=Fix.Atan2(dir.X,dir.Z);
+            events.Add(s.Tick,EventKind.Cast,id,id,p.Position,dir,ability:AbilityId.Dash);
+            return true;
+        }
+
+        // ------------------------------------------------------------------ Bola de Fogo
+        static bool CastFireBall(ref MatchState s,int id,PlayerInput input,EventBuffer events)
+        {
+            int slot=FreeProjectile(ref s);
+            if(slot<0) return false;
+            int target=input.TargetSlot>0?TargetOf(ref s,id,input):-1;
+            ref PlayerState p=ref MatchState.Player(ref s,id);
+            ref ProjectileState b=ref MatchState.Projectile(ref s,slot);
+            b=new ProjectileState { Kind=AbilityId.FireBall,Owner=(sbyte)id,Target=(sbyte)target,Aim=input.Aim,
+                Formation=Fix.Max(F(5),s.Abilities.FireFormation/Fix.Max(F(10),p.Config.CastSpeed)),Power=p.Config.SpellPower };
+            b.Position=HoldPoint(ref s,id);
+            events.Add(s.Tick,EventKind.Cast,id,slot,b.Position,p.Forward,ability:AbilityId.FireBall);
+            return true;
         }
 
         static FixVec3 HoldPoint(ref MatchState s,int owner)
@@ -113,32 +128,38 @@ namespace AnimLab.Netcode.Sim
             if(p.DashTime>=duration) { p.Dashing=false; events.Add(s.Tick,EventKind.Cast,id,id,p.Position,p.DashDir,ability:AbilityId.Dash,other:1); }
         }
 
-        /// <summary>Formação no ombro, voo balístico com varrimento, explosão no impacto.</summary>
+        /// <summary>Cada projétil avança pela regra do seu tipo; um dono que saiu da partida apaga-o.</summary>
         static void TickProjectiles(ref MatchState s,EventBuffer events)
         {
             for(int i=0;i<MatchState.ProjectileCapacity;i++)
             {
                 ref ProjectileState b=ref MatchState.Projectile(ref s,i);
-                if(b.Kind!=AbilityId.FireBall) continue;
-                if(b.Owner<0 || b.Owner>=s.Count) { b=default; continue; }
-                b.Age+=Dt;
-                if(!b.Launched)
-                {
-                    b.Position=HoldPoint(ref s,b.Owner);
-                    if(b.Age<b.Formation) continue;
-                    FixVec3 to=b.Target>=0 && b.Target<s.Count ? AimPoint(ref s,b.Target) : b.Aim;
-                    FixVec3 delta=to-b.Position;
-                    if(delta.LengthSquared<F(1)) delta=MatchState.Player(ref s,b.Owner).Forward;
-                    Fix flight=Fix.Max(delta.Length/Fix.Max(1,s.Abilities.FireSpeed),F(5));
-                    b.Velocity=delta/flight+FixVec3.Up*(F(50)*s.Abilities.FireGravity*flight);
-                    b.Launched=true;
-                    // O primeiro passo de voo usa só o tempo que sobrou da formação.
-                    Fix rest=Fix.Min(Dt,b.Age-b.Formation);
-                    if(rest>Fix.Zero) FlyFireBall(ref s,i,rest,events);
-                    continue;
-                }
-                FlyFireBall(ref s,i,Dt,events);
+                if(b.Kind==AbilityId.None) continue;
+                if(b.Owner<0 || b.Owner>=s.Count || tickRules[(int)b.Kind]==null) { b=default; continue; }
+                tickRules[(int)b.Kind](ref s,i,events);
             }
+        }
+        /// <summary>Formação no ombro, voo balístico com varrimento, explosão no impacto.</summary>
+        static void TickFireBall(ref MatchState s,int i,EventBuffer events)
+        {
+            ref ProjectileState b=ref MatchState.Projectile(ref s,i);
+            b.Age+=Dt;
+            if(!b.Launched)
+            {
+                b.Position=HoldPoint(ref s,b.Owner);
+                if(b.Age<b.Formation) return;
+                FixVec3 to=b.Target>=0 && b.Target<s.Count ? AimPoint(ref s,b.Target) : b.Aim;
+                FixVec3 delta=to-b.Position;
+                if(delta.LengthSquared<F(1)) delta=MatchState.Player(ref s,b.Owner).Forward;
+                Fix flight=Fix.Max(delta.Length/Fix.Max(1,s.Abilities.FireSpeed),F(5));
+                b.Velocity=delta/flight+FixVec3.Up*(F(50)*s.Abilities.FireGravity*flight);
+                b.Launched=true;
+                // O primeiro passo de voo usa só o tempo que sobrou da formação.
+                Fix rest=Fix.Min(Dt,b.Age-b.Formation);
+                if(rest>Fix.Zero) FlyFireBall(ref s,i,rest,events);
+                return;
+            }
+            FlyFireBall(ref s,i,Dt,events);
         }
         static FixVec3 AimPoint(ref MatchState s,int id)
         {
@@ -172,7 +193,7 @@ namespace AnimLab.Netcode.Sim
             int best=-1; along=Fix.One; Fix bestT=Fix.One+Fix.One;
             for(int j=0;j<s.Count;j++)
             {
-                if(j==owner) continue;
+                if(!MatchState.Hostile(ref s,owner,j)) continue;
                 ref PlayerState q=ref MatchState.Player(ref s,j);
                 Fix half=Fix.Max(0,q.Config.Height/2-q.Config.Radius);
                 FixVec3 c=q.Position+FixVec3.Up*q.Config.CenterY;
@@ -196,7 +217,7 @@ namespace AnimLab.Netcode.Sim
             events.Add(s.Tick,EventKind.Impact,b.Owner,i,center,b.Velocity,ability:b.Kind,other:direct);
             for(int j=0;j<s.Count;j++)
             {
-                if(j==b.Owner) continue;
+                if(!MatchState.Hostile(ref s,b.Owner,j)) continue;
                 FixVec3 closest=SwordGeometry.ClosestPoint(MatchState.Player(ref s,j),center);
                 Fix d=j==direct?Fix.Zero:(closest-center).Length;
                 if(d>radius) continue;
@@ -207,7 +228,7 @@ namespace AnimLab.Netcode.Sim
                 Fix dealt=Damage(ref s,b.Owner,j,s.Abilities.FireDamage*b.Power*k,40*k,knock,closest,events,Element.Fire);
                 if(!MatchState.Player(ref s,j).Invulnerable || dealt>Fix.Zero)
                     ApplyStatus(ref s,j,Status.Burning,4,events);
-                events.Add(s.Tick,EventKind.Hit,b.Owner,j,closest,away.Normalized,dealt,visualStop:Fix.Zero,ability:b.Kind);
+                events.Add(s.Tick,EventKind.Hit,b.Owner,j,closest,away.Normalized,dealt,visualStop:Fix.Zero,ability:b.Kind,element:Element.Fire);
             }
             MatchState.Projectile(ref s,i)=default;
         }

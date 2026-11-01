@@ -6,7 +6,7 @@ namespace AnimLab.Netcode.Sim
     /// <summary>Formato canónico explícito, independente de padding, plataforma e GetHashCode.</summary>
     public static class StateCodec
     {
-        public const int Version = 6;
+        public const int Version = 8;
         public static byte[] Encode(in MatchState state)
         {
             var s = state;
@@ -82,15 +82,7 @@ namespace AnimLab.Netcode.Sim
             w.Write(c.Height.Raw);
             w.Write(c.CenterY.Raw);
             w.Write((byte)c.Style);
-            w.Write((byte)c.Slot0);
-            w.Write((byte)c.Slot1);
-            w.Write((byte)c.Slot2);
-            w.Write((byte)c.Slot3);
-            w.Write((byte)c.Slot4);
-            w.Write((byte)c.Slot5);
-            w.Write((byte)c.Slot6);
-            w.Write((byte)c.Slot7);
-            w.Write((byte)c.Slot8);
+            w.Write(c.KnownAbilities);
             w.Write(c.MaxMana.Raw);
             w.Write(c.ManaRegen.Raw);
             w.Write(c.CastSpeed.Raw);
@@ -157,15 +149,7 @@ namespace AnimLab.Netcode.Sim
             c.Height = Fix.FromRaw(r.ReadInt64());
             c.CenterY = Fix.FromRaw(r.ReadInt64());
             c.Style = (Style)r.ReadByte();
-            c.Slot0 = (AbilityId)r.ReadByte();
-            c.Slot1 = (AbilityId)r.ReadByte();
-            c.Slot2 = (AbilityId)r.ReadByte();
-            c.Slot3 = (AbilityId)r.ReadByte();
-            c.Slot4 = (AbilityId)r.ReadByte();
-            c.Slot5 = (AbilityId)r.ReadByte();
-            c.Slot6 = (AbilityId)r.ReadByte();
-            c.Slot7 = (AbilityId)r.ReadByte();
-            c.Slot8 = (AbilityId)r.ReadByte();
+            c.KnownAbilities = r.ReadUInt16();
             c.MaxMana = Fix.FromRaw(r.ReadInt64());
             c.ManaRegen = Fix.FromRaw(r.ReadInt64());
             c.CastSpeed = Fix.FromRaw(r.ReadInt64());
@@ -334,6 +318,7 @@ namespace AnimLab.Netcode.Sim
             w.Write(p.PlungePhase);
             w.Write(p.HitStop);
             w.Write((byte)p.BufferedEdges);
+            w.Write(p.BufferedCast);
             w.Write((byte)p.Motion);
             w.Write((byte)p.Weapon);
         }
@@ -409,6 +394,7 @@ namespace AnimLab.Netcode.Sim
             p.PlungePhase = r.ReadInt32();
             p.HitStop = r.ReadInt32();
             p.BufferedEdges = (Buttons)r.ReadByte();
+            p.BufferedCast = r.ReadByte();
             p.Motion = (Motion)r.ReadByte();
             p.Weapon = (WeaponState)r.ReadByte();
             return p;

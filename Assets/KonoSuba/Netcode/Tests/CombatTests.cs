@@ -64,7 +64,7 @@ namespace AnimLab.Netcode.Tests
         {
             var s=Pair(Style.Greatsword); var e=new EventBuffer(); s.P0.Swing=2; Guard(ref s,false);
             World.Strike(ref s,0,FixVec3.Up,e);
-            Assert.AreEqual(Fix.Ratio(745,2),s.P1.Health); Assert.IsTrue(s.P1.Staggered);
+            Assert.AreEqual(400-SwordData.Get(Style.Greatsword,2).Damage*Fix.Ratio(1,2),s.P1.Health); Assert.IsTrue(s.P1.Staggered);
             Assert.AreEqual(WeaponState.Active,s.P0.Weapon); Assert.IsTrue(Has(e,EventKind.GuardBreak));
             s=Pair(); s.P1.SuperArmor=true;
             World.Strike(ref s,0,FixVec3.Up,e);

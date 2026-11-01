@@ -28,8 +28,13 @@ namespace AnimLab.Netcode.Sim
                 // A IA decide aqui, a partir do estado no início do tick; os bonecos ficam parados.
                 PlayerInput x = p.Kind == FighterKind.Duelist ? DuelistBrain.Think(ref state, i, events)
                     : p.Kind == FighterKind.Dummy ? default : inputs != null && i < inputs.Length ? inputs[i] : default;
-                if (p.HitStop > 0) { frozen |= 1 << i; p.BufferedEdges |= x.Buttons & edges; }
-                else { x.Buttons |= p.BufferedEdges; p.BufferedEdges = 0; }
+                if (p.HitStop > 0) { frozen |= 1 << i; p.BufferedEdges |= x.Buttons & edges; if (x.Cast != 0) p.BufferedCast = x.Cast; }
+                else
+                {
+                    x.Buttons |= p.BufferedEdges; p.BufferedEdges = 0;
+                    if (x.Cast == 0) x.Cast = p.BufferedCast;
+                    p.BufferedCast = 0;
+                }
                 input[i] = x;
             }
             for (int i = 0; i < count; i++) if ((frozen & 1 << i) != 0) MatchState.Player(ref state, i).HitStop--;

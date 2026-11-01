@@ -28,14 +28,9 @@ namespace AnimLab.Netcode.Sim
             PlayerState other = MatchState.Player(ref s, player == 0 ? 1 : 0);
             int t = (tick + player * 53) % 240;
             AbilityId want = t == 40 ? AbilityId.FireBall : t == 150 ? AbilityId.Dash : AbilityId.None;
-            if (want == AbilityId.None) return input;
-            for (int i = 0; i < 9; i++)
-                if (self.Config.Slot(i) == want)
-                {
-                    input.Cast = (byte)(i + 1);
-                    if (want == AbilityId.Dash) { input.Magnitude = 15; input.MoveAngle = (byte)(input.MoveAngle + 64); }
-                    break;
-                }
+            if (want == AbilityId.None || !self.Config.Knows(want)) return input;
+            input.Cast = (byte)want;
+            if (want == AbilityId.Dash) { input.Magnitude = 15; input.MoveAngle = (byte)(input.MoveAngle + 64); }
             input.AimX = (short)(other.Position.X * 100).Floor; input.AimZ = (short)(other.Position.Z * 100).Floor;
             return input;
         }

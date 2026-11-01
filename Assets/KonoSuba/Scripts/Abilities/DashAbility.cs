@@ -8,8 +8,20 @@ namespace AnimLab.KonoSuba
     /// Não usa o ambiente, mas mexe nele: o ar deslocado abre um rasto no nevoeiro e, mais fraco
     /// (a água é mais pesada), na água, com salpicos à partida e à chegada.
     /// </summary>
-    public class DashAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource
+    public class DashAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource, AnimLab.Netcode.Unity.INetAbilityPresenter
     {
+        // ------------------------------------------------------------------ Online
+        public AnimLab.Netcode.Sim.AbilityId NetAbility => AnimLab.Netcode.Sim.AbilityId.Dash;
+        public void Present(AnimLab.Netcode.Sim.SimEvent ev, GameObject other)
+        {
+            Vector3 at = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Point);
+            if (ev.Other == 1) { if (WaterRipples.Instance != null) WaterRipples.Instance.Spawn(at, 0.9f); return; }
+            // O ar empurrado à frente do corpo: rasto no nevoeiro e na água (como em Dash()).
+            FogField.Wind(at, AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Direction), distance * 1.4f, 1.8f, 0.45f, 3f);
+            if (WaterRipples.Instance != null) WaterRipples.Instance.Spray(at, 0.5f);
+        }
+        public void Sync(int slot, in AnimLab.Netcode.Sim.ProjectileState now, in AnimLab.Netcode.Sim.ProjectileState before, float alpha, float dt) { }
+        public void Clear(int slot) { }
         public void CaptureNetAbility(ref AnimLab.Netcode.Sim.AbilityTable t)
         {
             t.DashMana = AnimLab.Netcode.Unity.ViewConvert.Fixed(manaCost); t.DashCooldown = AnimLab.Netcode.Unity.ViewConvert.Fixed(cooldown);

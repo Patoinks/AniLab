@@ -23,6 +23,8 @@ namespace AnimLab.KonoSuba
         static FontAsset font, wideFont;
         static Material material, wideMaterial;
         static bool loaded;
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetForPlay() { loaded = false; font = wideFont = null; material = wideMaterial = null; }
 
         static readonly int GlyphBoxId = Shader.PropertyToID("_GlyphBox");
         static readonly int GlyphUVId = Shader.PropertyToID("_GlyphUV");

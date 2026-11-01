@@ -112,7 +112,7 @@ namespace AnimLab.KonoSuba
             Vector3 direction = AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Direction);
             if (ev.Damage > AnimLab.Netcode.Sim.Fix.Zero)
             {
-                AnyHit?.Invoke(this, new HitInfo { damage = AnimLab.Netcode.Unity.ViewConvert.Number(ev.Damage),
+                AnyHit?.Invoke(this, new HitInfo { damage = AnimLab.Netcode.Unity.ViewConvert.Number(ev.Damage), element = (AbilityElement)ev.Element,
                     point = point, critical = ev.Critical });
                 flinchAxis = Vector3.Cross(Vector3.up, direction);
                 flinchVel += 300f;

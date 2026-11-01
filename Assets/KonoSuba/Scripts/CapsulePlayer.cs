@@ -95,8 +95,16 @@ namespace AnimLab.KonoSuba
             // Alvo do lock-on como índice do lutador; teclas 1–9 da hotbar; ponto de mira no chão debaixo do rato.
             int target = lockOn != null && lockOn.Current != null ? AnimLab.Netcode.Unity.NetMatch.FighterIndexOf(lockOn.Current.gameObject) : -1;
             if (target >= 0) input.TargetSlot = (byte)(target + 1);
-            for (int i = 0; i < 9; i++)
-                if (GameInput.GetDown((GameAction)((int)GameAction.Ability1 + i))) { input.Cast = (byte)(i + 1); break; }
+            // Vai a habilidade que está no espaço (não o número do espaço): a hotbar pode mudar a meio da partida.
+            var bar = GetComponent<AbilityBar>();
+            for (int i = 0; i < 9 && bar != null; i++)
+            {
+                var key = (GameAction)((int)GameAction.Ability1 + i);
+                byte id = (byte)AbilityBar.IdOf(bar.At(i));
+                if (id == 0) continue;
+                if (GameInput.GetDown(key) && input.Cast == 0) input.Cast = id;
+                if (GameInput.Get(key) && input.Held == 0) input.Held = id;
+            }
             Vector3 aim = transform.position + transform.forward * 10f;
             if (cam != null && new Plane(Vector3.up, Vector3.zero).Raycast(cam.ScreenPointToRay(Input.mousePosition), out float d))
                 aim = cam.ScreenPointToRay(Input.mousePosition).GetPoint(d);

@@ -87,7 +87,7 @@ namespace AnimLab.KonoSuba
         {
             get
             {
-                if (stats == null) stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
+                if (stats == null || stats.name != "Player") stats = GameHud.LocalPlayer<CharacterStats>();
                 return stats;
             }
         }

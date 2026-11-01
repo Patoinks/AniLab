@@ -286,7 +286,24 @@ namespace AnimLab.KonoSuba
             self = GetComponent<Combatant>();
             controller = GetComponent<CharacterController>();
             lockOn = GetComponent<LockOn>();
+            if (GetComponent<ParryGlint>() == null) gameObject.AddComponent<ParryGlint>();
         }
+
+        // ------------------------------------------------------------------ Para o aviso de parry (ParryGlint)
+        /// <summary>Há um golpe a caminho (a preparar ou a meio), que ainda se pode aparar.</summary>
+        public bool IncomingStrike => state == State.Windup || state == State.Active || state == State.Plunge && plungePhase < 2;
+        /// <summary>Este lutador é o do jogador que está a ver (os golpes dele não pedem parry a ele próprio).</summary>
+        public bool IsViewer
+        {
+            get
+            {
+                var net = AnimLab.Netcode.Unity.NetMatch.Active;
+                return net != null ? net.LocalActor == gameObject : playerControlled;
+            }
+        }
+        public float ParryWindowSeconds => ParryWindow;
+        public Transform ActiveWeapon => Active;
+        public Vector3 ActiveTipLocal => HitB;
 
         void OnEnable() => All.Add(this);
         void OnDisable() => All.Remove(this);

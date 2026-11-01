@@ -20,12 +20,14 @@ namespace AnimLab.Netcode.Sim
         public bool Targeted;
         /// <summary>Alvo escolhido (lock-on): 0 = o mais próximo hostil; senão índice do lutador + 1.</summary>
         public byte TargetSlot;
-        /// <summary>Tecla da hotbar carregada neste tick (1–9; 0 = nenhuma).</summary>
+        /// <summary>Habilidade pedida neste tick (AbilityId; 0 = nenhuma): a que está no espaço da hotbar carregado.</summary>
         public byte Cast;
+        /// <summary>Habilidade cuja tecla está segura (AbilityId; 0 = nenhuma): canalizações e cargas.</summary>
+        public byte Held;
         /// <summary>Ponto de mira no chão (cm).</summary>
         public short AimX, AimZ;
         public FixVec3 Aim => new FixVec3(Fix.Ratio(AimX, 100), Fix.Zero, Fix.Ratio(AimZ, 100));
-        public const int WireSize = 11;
+        public const int WireSize = 12;
         public static PlayerInput Neutral(Fix yaw)
         {
             long angle=yaw.Raw%Fix.TwoPi.Raw; if(angle<0) angle+=Fix.TwoPi.Raw;
@@ -35,16 +37,16 @@ namespace AnimLab.Netcode.Sim
         public Fix Yaw => Fix.TwoPi * Fix.Ratio(LookYaw & 1023, 1024);
         public FixVec3 Wish => FixVec3.RotateY(FixVec3.Forward, Fix.TwoPi * Fix.Ratio(MoveAngle, 256)) * Fix.Ratio(Magnitude & 15, 15);
         public PlayerInput Predicted { get { var p = this; p.Buttons &= ~(Buttons.Attack | Buttons.Jump | Buttons.Roll); p.Cast = 0; return p; } }
-        public bool Equals(PlayerInput p) => MoveAngle == p.MoveAngle && Magnitude == p.Magnitude && LookYaw == p.LookYaw && Buttons == p.Buttons && Targeted == p.Targeted && TargetSlot == p.TargetSlot && Cast == p.Cast && AimX == p.AimX && AimZ == p.AimZ;
+        public bool Equals(PlayerInput p) => MoveAngle == p.MoveAngle && Magnitude == p.Magnitude && LookYaw == p.LookYaw && Buttons == p.Buttons && Targeted == p.Targeted && TargetSlot == p.TargetSlot && Cast == p.Cast && Held == p.Held && AimX == p.AimX && AimZ == p.AimZ;
         public override bool Equals(object o) => o is PlayerInput p && Equals(p);
-        public override int GetHashCode() => MoveAngle | (Magnitude << 8) | ((int)Buttons << 12) ^ (LookYaw << 17) ^ (Targeted ? 1<<30 : 0) ^ (TargetSlot << 24) ^ (Cast << 20) ^ AimX ^ (AimZ << 7);
-        public void Write(BinaryWriter w) { w.Write((byte)(Magnitude | (Targeted ? 16 : 0))); w.Write(MoveAngle); w.Write(LookYaw); w.Write((byte)Buttons); w.Write(TargetSlot); w.Write(Cast); w.Write(AimX); w.Write(AimZ); }
+        public override int GetHashCode() => MoveAngle | (Magnitude << 8) | ((int)Buttons << 12) ^ (LookYaw << 17) ^ (Targeted ? 1<<30 : 0) ^ (TargetSlot << 24) ^ (Cast << 20) ^ (Held << 16) ^ AimX ^ (AimZ << 7);
+        public void Write(BinaryWriter w) { w.Write((byte)(Magnitude | (Targeted ? 16 : 0))); w.Write(MoveAngle); w.Write(LookYaw); w.Write((byte)Buttons); w.Write(TargetSlot); w.Write(Cast); w.Write(Held); w.Write(AimX); w.Write(AimZ); }
         public static PlayerInput Read(BinaryReader r)
         {
-            byte m = r.ReadByte(), a = r.ReadByte(); ushort yaw = r.ReadUInt16(); var b = (Buttons)r.ReadByte(); byte target = r.ReadByte(), cast = r.ReadByte(); short ax = r.ReadInt16(), az = r.ReadInt16();
-            if (m > 31 || yaw > 1023 || ((byte)b & ~31) != 0 || target > MatchState.Capacity || cast > 9) throw new InvalidDataException("Invalid input");
+            byte m = r.ReadByte(), a = r.ReadByte(); ushort yaw = r.ReadUInt16(); var b = (Buttons)r.ReadByte(); byte target = r.ReadByte(), cast = r.ReadByte(), held = r.ReadByte(); short ax = r.ReadInt16(), az = r.ReadInt16();
+            if (m > 31 || yaw > 1023 || ((byte)b & ~31) != 0 || target > MatchState.Capacity || cast > 15 || held > 15) throw new InvalidDataException("Invalid input");
             return new PlayerInput { Magnitude = (byte)(m & 15), Targeted = (m & 16) != 0, MoveAngle = a, LookYaw = yaw, Buttons = b, TargetSlot = target,
-                Cast = cast, AimX = ax, AimZ = az };
+                Cast = cast, Held = held, AimX = ax, AimZ = az };
         }
     }
 
@@ -61,42 +63,14 @@ namespace AnimLab.Netcode.Sim
         public Fix DamageScale, AttackSpeed, CritChance, CritDamage, StaggerScale, BlockReduction, ParryWindow;
         public Fix Radius, Height, CenterY;
         public Style Style;
-        // Magia: hotbar (espaço → habilidade), mana e ficha do lançador; defesas mágicas.
-        public AbilityId Slot0, Slot1, Slot2, Slot3, Slot4, Slot5, Slot6, Slot7, Slot8;
+        // Magia: habilidades que o lutador conhece (bit = AbilityId), mana e ficha do lançador; defesas mágicas.
+        // A hotbar é só do cliente: o input já diz qual habilidade foi pedida, por isso reorganizá-la a meio da partida funciona.
+        public ushort KnownAbilities;
+        public bool Knows(AbilityId a) => a != AbilityId.None && (KnownAbilities & (1 << (int)a)) != 0;
+        public void Learn(AbilityId a) { if (a != AbilityId.None) KnownAbilities |= (ushort)(1 << (int)a); }
         public Fix MaxMana, ManaRegen, CastSpeed, SpellPower, CooldownReduction, MagicDefense, AimHeight;
         public Fix ResistWater, ResistLightning, ResistFire, ResistAir, ResistEarth, ResistIce, ResistDark;
         public Fix ResistWet, ResistStatic, ResistGrounded, ResistFrozen, ResistAsphyxia, ResistBurning, ResistBlind;
-        public AbilityId Slot(int i)
-        {
-            switch (i)
-            {
-                case 0: return Slot0;
-                case 1: return Slot1;
-                case 2: return Slot2;
-                case 3: return Slot3;
-                case 4: return Slot4;
-                case 5: return Slot5;
-                case 6: return Slot6;
-                case 7: return Slot7;
-                case 8: return Slot8;
-            }
-            return AbilityId.None;
-        }
-        public void SetSlot(int i, AbilityId a)
-        {
-            switch (i)
-            {
-                case 0: Slot0 = a; break;
-                case 1: Slot1 = a; break;
-                case 2: Slot2 = a; break;
-                case 3: Slot3 = a; break;
-                case 4: Slot4 = a; break;
-                case 5: Slot5 = a; break;
-                case 6: Slot6 = a; break;
-                case 7: Slot7 = a; break;
-                case 8: Slot8 = a; break;
-            }
-        }
         public Fix ElementResist(Element e)
         {
             switch (e)
@@ -157,7 +131,7 @@ namespace AnimLab.Netcode.Sim
         public ushort StruckMask;
         public FighterKind Kind;
         public AiState Ai;
-        // Magia: mana, recargas por espaço da hotbar (tempo global em que fica pronto), dash em curso, estados.
+        // Magia: mana, recargas por habilidade (Cooldown{AbilityId-1}: tempo global em que fica pronta), dash em curso, estados.
         public Fix Mana;
         public Fix Cooldown0, Cooldown1, Cooldown2, Cooldown3, Cooldown4, Cooldown5, Cooldown6, Cooldown7, Cooldown8;
         public bool Dashing;
@@ -242,6 +216,7 @@ namespace AnimLab.Netcode.Sim
         public Fix Health, Poise, StaggerUntil, LastHitAt;
         public int HitStop;
         public Buttons BufferedEdges;
+        public byte BufferedCast;
         public Fix BodyTime;
         public bool Attacking => Weapon == WeaponState.Windup || Weapon == WeaponState.Active || Weapon == WeaponState.Recovery || Weapon == WeaponState.Plunge;
         public bool Staggered => BodyTime < StaggerUntil;
@@ -332,6 +307,7 @@ namespace AnimLab.Netcode.Sim
         public Fix VisualStop;
         public bool Critical, Heavy;
         public AbilityId Ability;
+        public Element Element;
         public Status Status;
         /// <summary>Índice extra (ex.: o corpo atingido em cheio por um projétil; -1 = nenhum).</summary>
         public int Other;
@@ -347,12 +323,12 @@ namespace AnimLab.Netcode.Sim
         public SimEvent this[int i] => items[i];
         public void Clear() { Count = 0; }
         public void Add(int tick, EventKind kind, int source, int target, FixVec3 at, FixVec3 direction, Fix damage = default, bool critical = false, Fix visualStop = default, FixVec3 spray = default, bool heavy = false,
-            AbilityId ability = AbilityId.None, Status status = Status.None, int other = -1)
+            AbilityId ability = AbilityId.None, Status status = Status.None, int other = -1, Element element = Element.Neutral)
         {
             if (Count == items.Length) throw new InvalidOperationException("Event capacity");
             // O id descreve o evento, não a ordem em que foi acrescentado durante a previsão.
             int id = ((int)kind << 8) | (source << 4) | target;
-            items[Count++] = new SimEvent { Tick = tick, Id = id, Kind = kind, Source = source, Target = target, Point = at, Direction = direction, Damage = damage, Critical = critical, VisualStop = visualStop, Spray = spray, Heavy = heavy, Ability = ability, Status = status, Other = other };
+            items[Count++] = new SimEvent { Tick = tick, Id = id, Kind = kind, Source = source, Target = target, Point = at, Direction = direction, Damage = damage, Critical = critical, VisualStop = visualStop, Spray = spray, Heavy = heavy, Ability = ability, Status = status, Other = other, Element = element };
         }
     }
 }
