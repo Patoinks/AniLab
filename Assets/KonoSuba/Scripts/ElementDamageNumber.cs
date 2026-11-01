@@ -55,7 +55,7 @@ namespace AnimLab.KonoSuba
         Vector2 drift;
         float age, lifetime, seed, capHalf;
         int fx;
-        int style; // 0 fogo, 1 água, 2 eletricidade, 3 ar, 4 terra, 5 gelo, 6 trevas (como no shader)
+        int style; // 0 fogo, 1 água, 2 eletricidade, 3 ar, 4 terra, 5 gelo, 6 trevas, 7 neutro (como no shader)
         bool crit;
         Mesh mesh;
         MeshRenderer meshRenderer;
@@ -75,6 +75,8 @@ namespace AnimLab.KonoSuba
                 AbilityElement.Earth => 4,
                 AbilityElement.Ice => 5,
                 AbilityElement.Dark => 6,
+                // Neutro (espada): branco liso, só no estilo das referências; nos outros fica o número de antes.
+                AbilityElement.Neutral when Variant == 9 => 7,
                 _ => -1
             };
             if (style < 0 || !Load()) return false;
@@ -91,7 +93,9 @@ namespace AnimLab.KonoSuba
 
         static bool Load()
         {
-            if (loaded) return font != null && material != null && wideFont != null;
+            if (font != null && material != null && wideFont != null && wideMaterial != null) return true;
+            // Já se tentou e falhou de vez (sem shader ou sem fonte nenhuma): não repetir em todos os golpes.
+            if (loaded && Shader.Find("KonoSuba/ElementDamageNumber") == null) return false;
             loaded = true;
             Shader shader = Shader.Find("KonoSuba/ElementDamageNumber");
             if (shader == null) return false;
@@ -121,6 +125,11 @@ namespace AnimLab.KonoSuba
                 fontAsset = null;
             }
             if (fontAsset == null) return false;
+            // DontSave: criados em runtime, o Unity apagava-os ao mudar de cena (UnloadUnusedAssets) e os números
+            // deixavam de aparecer até reiniciar o jogo.
+            fontAsset.hideFlags = HideFlags.DontSave;
+            foreach (Texture2D tex in fontAsset.atlasTextures)
+                if (tex != null) tex.hideFlags = HideFlags.DontSave;
             mat = new Material(shader) { hideFlags = HideFlags.DontSave, mainTexture = fontAsset.atlasTexture };
             return true;
         }
@@ -167,7 +176,12 @@ namespace AnimLab.KonoSuba
                 + (crit ? 0.1f : 0f);
             // Metin: só brilho e riscos, que passam do número para os lados. 9: brilho largo e as marcas.
             if (Metin) { x0 = -width * 0.5f - 0.9f; x1 = width * 0.5f + 0.9f; y0 = -cap * 0.5f - 0.5f; y1 = cap * 0.5f + 0.5f; }
-            if (fx == 9) { x0 = -width * 0.5f - 0.75f; x1 = width * 0.5f + 0.75f; y0 = -cap * 0.5f - 0.6f; y1 = cap * 0.5f + 0.6f; }
+            // 9: brilho largo e o efeito (o raio da eletricidade vai ~1.3 h para a direita).
+            if (fx == 9)
+            {
+                x0 = -width * 0.5f - 0.75f; x1 = width * 0.5f + (style == 2 ? 1.1f : 0.75f);
+                y0 = -cap * 0.5f - 0.6f; y1 = cap * 0.5f + 0.6f;
+            }
             var verts = new[] { new Vector3(x0, y0), new Vector3(x1, y0), new Vector3(x0, y1), new Vector3(x1, y1) };
             mesh = new Mesh { name = "ElementDamageNumber", hideFlags = HideFlags.DontSave };
             mesh.vertices = verts;

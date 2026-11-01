@@ -73,7 +73,7 @@ Shader "KonoSuba/ElementDamageNumber"
             // Cor de destaque de cada elemento (variantes minimalistas).
             float3 Accent(int style)
             {
-                return style == 1 ? float3(0.25, 0.65, 1.0) : style == 2 ? float3(0.6, 0.6, 1.0)
+                return style == 7 ? float3(1.0, 1.0, 1.0) : style == 1 ? float3(0.25, 0.65, 1.0) : style == 2 ? float3(0.6, 0.6, 1.0)
                      : style == 3 ? float3(0.35, 1.0, 0.75) : style == 4 ? float3(0.85, 0.55, 0.28)
                      : style == 5 ? float3(0.6, 0.88, 1.0) : style == 6 ? float3(0.6, 0.28, 0.95)
                      : float3(1.0, 0.42, 0.08);
@@ -136,6 +136,12 @@ Shader "KonoSuba/ElementDamageNumber"
                 float t = saturate(abs(u) / halfLen);
                 float dEnd = abs(u) - halfLen;
                 return dEnd > 0.0 ? length(float2(dEnd, v)) : abs(v) - halfW * (1.0 - t * t);
+            }
+
+            float SegDist(float2 p, float2 a, float2 b)
+            {
+                float2 pa = p - a, ba = b - a;
+                return length(pa - ba * saturate(dot(pa, ba) / dot(ba, ba)));
             }
 
             // As letras deslocadas em 8 direções: estende o SDF da fonte (que só chega ~0.1 em para fora).
@@ -447,11 +453,14 @@ Shader "KonoSuba/ElementDamageNumber"
                 }
                 else if (fx == 9)
                 {
-                    // Creme com borda laranja, brilho laranja largo e suave, e duas marcas a pincel (uma em cima
-                    // à esquerda do primeiro algarismo, outra em baixo à direita do último). Usa a fonte com SDF
-                    // largo (ElementDamageNumber.cs), por isso o brilho vem direto da distância.
+                    // Estilo das referências do Manuel: algarismos a pincel claros, borda e brilho na cor do elemento,
+                    // e um efeito por elemento. Fogo: creme e brilho laranja. Eletricidade: branco,
+                    // borda e brilho violeta escuros, raio fino em zigue-zague. Ar: branco-menta, brilho verde,
+                    // rajadas de penas atrás. Neutro (7): branco liso. Os outros: brilho na cor do elemento.
+                    // Usa a fonte com SDF largo (ElementDamageNumber.cs), por isso o brilho vem direto da distância.
                     float padEm = 0.5 / _SdfPerEm;
                     float h = 2.0 * _CapHalf;
+                    float top = _CapHalf, bottom = -_CapHalf;
                     float ix0 = 1e3, ix1 = -1e3;
                     for (int g = 0; g < MAX_GLYPHS; g++)
                     {
@@ -459,40 +468,146 @@ Shader "KonoSuba/ElementDamageNumber"
                         ix0 = min(ix0, _GlyphBox[g].x + padEm);
                         ix1 = max(ix1, _GlyphBox[g].x + _GlyphBox[g].z - padEm);
                     }
-                    // em; mais grosso que a fonte e com as bordas alisadas (média de 5 amostras do SDF): a referência
-                    // tem traços mais cheios e sem a rugosidade do pincel.
+                    // em; mais grosso que a fonte e com as bordas alisadas (média de 5 amostras do SDF): as referências
+                    // têm traços mais cheios e sem a rugosidade do pincel. O neutro fica com a fonte tal como é.
                     float r = 0.022 * h;
                     float smoothBody = (body * 2.0 + Sdf(p + float2(r, r)) + Sdf(p + float2(-r, r))
                                       + Sdf(p + float2(r, -r)) + Sdf(p + float2(-r, -r))) / 6.0;
-                    float dNum = (0.5 - smoothBody) / _SdfPerEm - 0.035 * h;
-                    float2 dir = float2(0.643, 0.766); // ~50°
-                    float dL = Lens(p, float2(ix0 - 0.28 * h, _CapHalf - 0.1 * h), dir, 0.25 * h, 0.085 * h);
-                    float dR = Lens(p, float2(ix1 + 0.28 * h, -_CapHalf + 0.1 * h), dir, 0.25 * h, 0.085 * h);
-                    float dMark = min(dL, dR);
+                    float dNum = style == 7 ? (0.5 - body) / _SdfPerEm
+                                            : (0.5 - smoothBody) / _SdfPerEm - 0.035 * h;
+
+                    // Sem marcas extra (o fogo tinha duas folhas a pincel nas diagonais; o Manuel tirou-as). dMark fica
+                    // para as contas de baixo, sempre "longe".
+                    float dMark = 1e3;
                     float d = min(dNum, dMark);
                     float aaEm = max(fwidth(p.y), 1e-4);
                     letterA = smoothstep(aaEm, -aaEm, d);
 
-                    // Creme por dentro, a passar a laranja claro junto à borda; as marcas mais alaranjadas.
-                    float inside = saturate(-d / (0.07 * h));
-                    // Lineares 0..1 (desenhado depois do tonemap). sRGB da referência: creme 255,248,215; borda de
-                    // dentro 255,205,152; marcas mais alaranjadas.
-                    float3 rimIn = float3(1.0, 0.45, 0.2);
-                    float3 cream = dMark < dNum ? float3(1.0, 0.7, 0.4) : float3(1.0, 0.94, 0.68);
-                    letterCol = lerp(rimIn, cream, smoothstep(0.0, 1.0, inside)) * (1.0 + 0.1 * _Crit);
+                    // Cores lineares 0..1 (desenhado depois do tonemap). Brilho: duas exponenciais (perto, cauda),
+                    // em unidades de h; emissivo (soma luz) ou escuro (escurece o fundo, a eletricidade).
+                    float3 fill, rimIn, glowCol;
+                    float nearA = 0.38, nearR = 0.08, farA = 0.12, farR = 0.22, rimW = 0.07;
+                    if (style == 0)
+                    {
+                        // sRGB da referência: creme 255,248,215; borda de dentro 255,205,152; brilho ~255,124,48.
+                        fill = dMark < dNum ? float3(1.0, 0.7, 0.4) : float3(1.0, 0.94, 0.68);
+                        rimIn = float3(1.0, 0.45, 0.2);
+                        glowCol = float3(1.0, 0.2, 0.03);
+                    }
+                    else if (style == 2)
+                    {
+                        // Branco com contorno violeta e uma sombra violeta escura à volta (referência: 35,20,73 junto
+                        // às letras, a desaparecer em ~0.8 h). É sombra, não luz: escurece o fundo.
+                        fill = float3(0.9, 0.88, 1.0);
+                        rimIn = float3(0.16, 0.04, 0.62);
+                        rimW = 0.05;
+                        glowCol = float3(0.016, 0.005, 0.066);
+                        nearA = 0.8; nearR = 0.09; farA = 0.5; farR = 0.32;
+                    }
+                    else if (style == 3)
+                    {
+                        // Quase branco com um toque de menta; brilho verde fraco e difuso (referência: só +40 no verde
+                        // junto às letras).
+                        fill = float3(0.9, 1.0, 0.93);
+                        rimIn = float3(0.55, 1.0, 0.7);
+                        rimW = 0.03;
+                        glowCol = float3(0.045, 0.4, 0.155);
+                        nearA = 0.26; nearR = 0.06; farA = 0.18; farR = 0.36;
+                    }
+                    else if (style == 7)
+                    {
+                        // Neutro: branco liso, sem brilho.
+                        fill = 1.0; rimIn = 1.0; glowCol = 0.0;
+                        nearA = 0.0; farA = 0.0;
+                    }
+                    else
+                    {
+                        // Sem referência ainda: branco tingido, borda e brilho na cor do elemento.
+                        fill = lerp(1.0, accent, 0.12);
+                        rimIn = accent;
+                        rimW = 0.045;
+                        glowCol = accent * accent;
+                        nearA = 0.32; nearR = 0.08; farA = 0.12; farR = 0.24;
+                    }
+                    letterCol = lerp(rimIn, fill, smoothstep(0.0, 1.0, saturate(-d / (rimW * h)))) * (1.0 + 0.1 * _Crit);
 
-                    // Brilho: duas exponenciais medidas na referência (forte junto à letra, cauda até ~0.75 h),
-                    // a apagar antes do fim do SDF largo.
-                    // Algarismos e marcas à parte: fora da caixa de cada algarismo o SDF é 0 ("longe"), por isso o
-                    // brilho dos algarismos apaga-se antes do fim do SDF; o das marcas é analítico, não tem limite.
+                    // Fora da caixa de cada algarismo o SDF é 0 ("longe"): o brilho dos algarismos apaga-se antes do fim
+                    // do SDF; o das marcas é analítico, não tem limite. A referência deixa de ter brilho por ~0.9 h.
                     float dN = max(dNum, 0.0) / h, dM = max(dMark, 0.0) / h;
-                    float glowN = (0.38 * exp(-dN / 0.08) + 0.12 * exp(-dN / 0.22)) * smoothstep(0.0, 0.14, body);
-                    float glowM = 0.38 * exp(-dM / 0.08) + 0.12 * exp(-dM / 0.22);
-                    float glow = 1.0 - (1.0 - glowN) * (1.0 - glowM);
-                    // A referência deixa de ter brilho por volta de 0.9 h; dentro da quad, sem cortes.
-                    glow *= 1.0 - smoothstep(0.4, 0.75, min(dN, dM));
-                    backA = glow * (1.0 + 0.2 * _Crit);
-                    backCol = float3(1.0, 0.2, 0.03); // sRGB ~255,124,48: laranja, não vermelho
+                    float glowN = (nearA * exp(-dN / nearR) + farA * exp(-dN / farR)) * smoothstep(0.0, 0.14, body);
+                    float glowM = nearA * exp(-dM / nearR) + farA * exp(-dM / farR);
+                    float glow = (1.0 - (1.0 - glowN) * (1.0 - glowM)) * (1.0 - smoothstep(0.4, 0.75, min(dN, dM)));
+                    glow *= 1.0 + 0.2 * _Crit;
+                    float3 backPm = glowCol * glow; // pré-multiplicado
+                    backA = glow;
+
+                    if (style == 2)
+                    {
+                        // Raio: sai de baixo do fim do número, sobe para a direita com um zigue-zague perto do início.
+                        // Núcleo lavanda fino, brilho violeta à volta e um clarão no vértice; um fio fraco em cima à
+                        // esquerda e uma faísca.
+                        // Curva em 8 segmentos: começa por baixo do número, sobe para a direita e encurva para cima
+                        // no fim; perto do início dá um passo para trás (o "Z" do raio), com um clarão no vértice.
+                        float j = (Hash1(_Seed) - 0.5) * 0.25;
+                        float x0b = ix1 - 0.55 * h, x1b = ix1 + 1.3 * h;
+                        float db = 1e3, core = 0.0;
+                        float2 prev = float2(x0b, bottom - 0.2 * h);
+                        float2 kink = prev;
+                        [unroll] for (int k = 1; k <= 8; k++)
+                        {
+                            float uk = k / 8.0;
+                            float2 pt = float2(lerp(x0b, x1b, uk), bottom - 0.2 * h + (0.65 + j) * h * uk * uk);
+                            if (k == 3) { kink = pt + float2(0.12 * h, 0.08 * h); pt = kink; }
+                            if (k == 4) pt.x -= 0.16 * h;
+                            float dk = SegDist(p, prev, pt);
+                            float wk = 0.02 * h * (1.0 - 0.75 * uk) * saturate(uk * 6.0);
+                            core = max(core, 1.0 - smoothstep(wk - aaEm, wk + aaEm, dk));
+                            db = min(db, dk);
+                            prev = pt;
+                        }
+                        float along = saturate((p.x - x0b) / (x1b - x0b));
+                        float bolt = core + 0.6 * exp(-db / (0.04 * h)) * (1.0 - along * 0.5)
+                                   + 1.2 * exp(-length(p - kink) / (0.07 * h));
+                        float faint = SegDist(p, float2(ix0 - 1.0 * h, top + 0.1 * h), float2(ix0 - 0.2 * h, bottom + 0.4 * h));
+                        bolt += 0.18 * (1.0 - smoothstep(0.006 * h, 0.016 * h, faint)) + 0.08 * exp(-faint / (0.03 * h));
+                        bolt += 0.8 * exp(-length(p - float2(ix0 + 0.1 * h, top + 0.55 * h)) / (0.016 * h));
+                        bolt = saturate(bolt) * (1.0 - letterA);
+                        // Referência: núcleo 160,128,255 (linear ~0.35,0.22,1), brilho violeta.
+                        backPm = backPm * (1.0 - bolt) + lerp(float3(0.22, 0.1, 0.9), float3(0.42, 0.3, 1.0), core) * bolt;
+                        backA = backA + bolt * (1.0 - backA);
+                    }
+                    else if (style == 3)
+                    {
+                        // Rajadas: faixa curva de penas finas por trás, de cima à esquerda a baixo à direita, com as
+                        // fibras a correr; uma segunda mais pequena em baixo à direita; partículas verdes.
+                        float xa = ix0 - 0.8 * h, xb = ix1 + 0.9 * h;
+                        float u = (p.x - xa) / (xb - xa);
+                        float wisp = 0.0;
+                        [unroll] for (int k = 0; k < 2; k++)
+                        {
+                            // 0: de cima à esquerda, por trás do meio do número, até baixo à direita (em S).
+                            // 1: mais pequena, só em baixo à direita.
+                            float u0 = k == 0 ? 0.0 : 0.5;
+                            float uu = saturate((u - u0) / (1.0 - u0));
+                            float yc = k == 0 ? lerp(top + 0.15 * h, bottom - 0.3 * h, smoothstep(0.0, 1.0, uu))
+                                              : lerp(bottom + 0.05 * h, bottom - 0.45 * h, uu * uu);
+                            float hw = (k == 0 ? 0.42 : 0.2) * h * pow(sin(3.14159 * uu), 0.5) + 1e-4;
+                            float v = (p.y - yc) / hw;
+                            float band = exp(-v * v * 2.2) * step(u0, u) * step(u, 1.0) * smoothstep(0.0, 0.15, uu);
+                            float fibre = sin(v * 5.0 + FireNoise2(float2(uu * 4.0 - t * 1.2, v * 1.5) + _Seed + k * 3.0) * 4.0);
+                            wisp = max(wisp, band * (0.4 + 0.6 * smoothstep(-0.2, 1.0, fibre)) * (k == 0 ? 0.55 : 0.4));
+                        }
+                        float2 q = p / (0.09 * h) + float2(_Seed, -t * 0.6);
+                        float2 cell = floor(q);
+                        float dotD = length(frac(q) - (float2(Hash2(cell + 7.0), Hash2(cell + 13.0)) * 0.6 + 0.2));
+                        float nearDots = 1.0 - smoothstep(0.2, 0.55, min(dN, 1.0));
+                        float spark = step(0.93, Hash2(cell)) * (1.0 - smoothstep(0.05, 0.14, dotD)) * nearDots;
+                        float add = saturate(wisp + spark) * (1.0 - letterA);
+                        // Referência: 86,157,127 sobre o fundo, translúcido (linear ~0.16,0.58,0.3).
+                        backPm = backPm * (1.0 - add) + float3(0.16, 0.58, 0.3) * add;
+                        backA = backA + add * (1.0 - backA);
+                    }
+                    backCol = backPm / max(backA, 1e-4);
                     haloK = 0.0;
                 }
                 else if (fx == 8)

@@ -5,9 +5,8 @@ estarem a par. Unity 6000.3.15f1, cena `Assets/Scenes/KonoSubaVoid.unity`. Atual
 mudar alguma coisa nesta área.
 
 **Estado:** os 7 elementos têm números de dano próprios, ligados ao combate real (`Combatant.AnyHit`). O estilo
-padrão é a **variante 9**: algarismos a pincel (fonte do projeto) em creme com borda laranja, brilho laranja suave
-e duas marcas a pincel (`'` antes, `,` depois), réplica de uma referência que o Manuel escolheu. Testado em Play,
-sem erros na consola.
+padrão é a **variante 9**: algarismos a pincel (fonte do projeto) claros, com borda e brilho na cor do elemento e
+um efeito próprio por elemento (réplica das referências que o Manuel escolheu). Testado em Play, sem erros na consola.
 
 ## O que existe agora
 
@@ -18,6 +17,9 @@ sem erros na consola.
     `Resources.Load` e convertida em SDF em runtime. Sem ela, cai para Cambria/Palatino/Times do Windows.
   - **Duas versões da fonte:** SDF curto (padding 10, ~0.11 em; os efeitos dos elementos, variantes 0–8, estão
     afinados para isto) e SDF largo (padding 54, ~0.6 em; só a variante 9, cujo brilho vai até ~0.75 da altura).
+  - Fontes e atlas com `HideFlags.DontSave`: criados em runtime, o Unity apagava-os ao mudar de cena e os números
+    deixavam de aparecer até reiniciar. `Load()` recria-os se faltarem (e o `ResetForPlay` do Martim limpa ao
+    entrar em Play).
   - `_SdfPerEm` vai no `MaterialPropertyBlock` de cada número, não no material: não está nas Properties do
     shader e um reimport do shader apagava-o do material.
   - **`Variant`** (estático) escolhe o aspeto; cada número guarda o que estava ativo quando nasceu.
@@ -36,7 +38,7 @@ sem erros na consola.
     | 1–6 | Minimalistas: brilho, contorno + sombra, subtil, faíscas, risco de luz, plano + sombra |
     | 7 | "Metin": núcleo creme, borda na cor do elemento, brilho, riscos compridos dos lados |
     | 8 | Só a fonte, branco liso (para ver a forma dos algarismos) |
-    | **9** | **Padrão.** Creme + borda laranja, brilho laranja (duas exponenciais medidas na referência), traço alisado e mais grosso que a fonte, marcas a pincel (`Lens`) em cima à esquerda e em baixo à direita. Laranja em todos os elementos, por agora. |
+    | **9** | **Padrão.** Traço alisado e mais grosso que a fonte; brilho por duas exponenciais medidas nas referências. Por elemento (`_Style`): **fogo** creme + brilho laranja; **eletricidade** branco, contorno e sombra violeta escuros, raio lavanda em zigue-zague a sair de baixo do fim do número; **ar** quase branco, brilho verde fraco, rajadas de penas em S por trás e partículas; **neutro (7, espada)** branco liso, sem brilho; **água, terra, gelo, trevas** branco tingido com borda e brilho na cor do elemento (sem referência ainda). |
 
   - `_Style` (elemento), usado pelo efeito completo (Fx 0):
 
@@ -53,8 +55,8 @@ sem erros na consola.
 - **`AnimLabRenderFeature`**: passe novo `OverlayPass` ("Sobreposição AnimLab"), o último, depois do tonemap e da
   composição do fogo. Desenha os renderers com o passe `AnimLabOverlay`. Sem esta feature no renderer, os números
   não aparecem.
-- **`CombatOverlay.OnHit`**: tenta `ElementDamageNumber.Spawn` primeiro; os outros elementos (Neutral, a espada)
-  continuam com os números em UI Toolkit de antes. Usa o dano já mitigado e o `critical` do `HitInfo`, por isso
+- **`CombatOverlay.OnHit`**: tenta `ElementDamageNumber.Spawn` primeiro. Com a variante 9 também o Neutral (espada)
+  usa estes números (estilo 7, branco); nas outras variantes o Neutral fica com os números em UI Toolkit de antes. Usa o dano já mitigado e o `critical` do `HitInfo`, por isso
   funciona igual para golpes vindos do netcode (`PresentNetEvent`).
 
 ## Outras alterações
@@ -79,7 +81,7 @@ sem erros na consola.
 
 ## Pendente / a saber
 
-- A variante 9 usa laranja em todos os elementos; falta decidir as cores por elemento neste estilo.
+- Água, terra, gelo e trevas na variante 9 só têm a cor do elemento; falta referência para um efeito próprio.
 - As variantes 0–8 ficam no código para comparar; quando o estilo estiver fechado, apagar as que não se usam.
   Com o passe depois do tonemap, as cores delas (afinadas para antes do tonemap) ficam um pouco mais vivas.
 - Só a Bola de Fogo, a Bola de Água e o Kirin dão dano. O Raio (tecla 3), a Bola de Vento e o resto não
@@ -96,4 +98,5 @@ sem erros na consola.
 | `0b27b76` | Merge com o origin/main (combate, netcode, hotbar), sem conflitos |
 | `b9eeb78` | Números ligados ao CombatOverlay (dano real); fogo, água, eletricidade; dano do Kirin |
 | `1321e31` | Ar, terra, gelo, trevas; habilidades de teste na hotbar; este documento |
-| a seguir | Fonte a pincel, variantes 1–9 (9 padrão), passe depois do tonemap, críticos sem `!` |
+| `2a4fc25` | Fonte a pincel, variantes 1–9 (9 padrão), passe depois do tonemap, críticos sem `!` |
+| a seguir | Variante 9 por elemento (eletricidade, ar, neutro, cores dos outros), fogo sem marcas, fontes sobrevivem a mudar de cena |
