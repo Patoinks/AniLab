@@ -83,6 +83,7 @@ namespace AnimLab.Netcode.Sim
             FixVec3 wish=input.Wish;
             FixVec3 dir=wish.LengthSquared>F(1)?wish.Normalized:p.Forward.Flat.Normalized;
             if(dir.LengthSquared<F(1)) return false;
+            Spend(ref p,SwordData.DashStamina);
             p.DashDir=dir; p.DashTime=0; p.Dashing=true; p.Yaw=Fix.Atan2(dir.X,dir.Z);
             events.Add(s.Tick,EventKind.Cast,id,id,p.Position,dir,ability:AbilityId.Dash);
             return true;

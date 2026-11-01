@@ -37,6 +37,15 @@ Tudo o que muda o resultado de um combate tem de correr **igual, bit a bit**, no
 ## 4. Receita: arma / estilo de espada
 
 - Golpes em `Sim/SwordData.cs`: cada arma = golpes da Espada × (`TimeRatio`, `DamageRatio`) × `Slowdown`. O carácter (empurrão, salto, avanço, hit-stop) é por golpe.
+- Ritmo anti-spam (constantes em `SwordData`, aplicadas igual no offline e na simulação):
+  - Um golpe que entra interrompe o do alvo e deixa-o `Flinch` sem agir. O super armor da Greatsword aguenta.
+  - Greatsword: leva menos stagger, sempre (postura gasta e flinch × `StaggerTaken`), e tem mais alcance (`ExtraReach` no braço e mais avanço).
+  - Clash: só quando as duas lâminas começam a cortar com `ClashWindow` ou menos de diferença; fora disso, ganha quem atacou primeiro.
+  - Stamina: cada golpe gasta `SwingData.Stamina`, que é a base × a média de tempo e dano da arma. Roll, dash e pique também gastam. Um golpe começado sem stamina para o pagar sai na mesma, mas `TiredSlowdown` mais lento (+30% de tempo). Bloquear gasta stamina em vez de postura, e quando chega a zero a guarda parte. Só recupera depois de uma pausa sem gastar, e a guardar recupera a metade.
+  - Parry: quem o leva fica `ParryStun` em stagger. Clash: os dois recuam `ClashRecoil` e são empurrados para trás a `ClashPush`.
+  - Golpe falhado (`StruckMask == 0`): tem a recuperação inteira e não se corta para a guarda.
+  - `ComboRest`: pausa depois do último golpe do combo.
+  - `QueueFrom`: o clique para o golpe seguinte só conta a partir dessa fração da fase ativa.
 - Arcos em `SwordGeometry.Arc` (o `SwordWielder` offline usa o mesmo arco).
 - Feedback de contacto em `SwordWielder.Show*` (o mesmo offline e online).
 

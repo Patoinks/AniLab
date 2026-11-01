@@ -30,6 +30,7 @@ namespace AnimLab.KonoSuba.EditorTools
     /// Player num ponto, virado para o alvo (durante o aquecimento): -capturePlayerAt x,y,z.
     /// Ataques de espada do Player nos frames dados (Espaço): -captureAttacks "10,16,22".
     /// Janela de stats aberta, a passar pelos separadores (um a cada 2 frames): -captureStats 1.
+    /// Consola de admin (F6) com comandos em frames: -captureAdmin "30:kill ai|60:kill dummy".
     /// Árvores (tecla V): -captureSkills 1 — escolha Lightning + Fire nos frames 0–5, confirmada no 6, nós
     /// aprendidos no 8; no fim a escolha é desfeita (não fica nas PlayerPrefs do jogo).
     /// Duelista sempre a guardar (sem AI): -captureDuelistGuard 1.
@@ -65,6 +66,7 @@ namespace AnimLab.KonoSuba.EditorTools
             // Shaders acabados de mudar compilam em segundo plano e, até lá, os objetos não são desenhados:
             // na captura têm de estar prontos logo no primeiro frame.
             EditorSettings.asyncShaderCompilation = false;
+            SaveProgress();
             bool lookdev = Arg("-captureLookdev", "0") == "1";
             if (Arg("-captureBuild", lookdev ? "0" : "1") == "1") KonoSubaSceneSetup.Build();
             EditorSceneManager.OpenScene("Assets/Scenes/KonoSubaVoid.unity");
@@ -239,6 +241,7 @@ namespace AnimLab.KonoSuba.EditorTools
             foreach (string a in Arg("-captureRoll", "").Split(','))
                 if (a.Length > 0 && int.Parse(a) == index && mover != null) mover.Roll(mover.transform.forward);
             if (Arg("-captureSkills", "0") == "1") SkillsStep();
+            if (Arg("-captureAdmin", null) != null) AdminStep(Arg("-captureAdmin", ""));
             // Duelista parado a guardar (para testar bloqueios e o Guard Breaker).
             if (Arg("-captureDuelistGuard", "0") == "1")
             {
@@ -252,7 +255,7 @@ namespace AnimLab.KonoSuba.EditorTools
                 }
             }
             if (index == 0 && Arg("-captureStyle", null) != null)
-                UnityEngine.Object.FindFirstObjectByType<CharacterStats>()?.SetSwordStyle((SwordStyle)Enum.Parse(typeof(SwordStyle), Arg("-captureStyle", "Knight")));
+                GameHud.LocalPlayer<CharacterStats>()?.SetSwordStyle((SwordStyle)Enum.Parse(typeof(SwordStyle), Arg("-captureStyle", "Knight")));
 
             if (Arg("-captureStats", "0") == "1")
             {
@@ -309,10 +312,24 @@ namespace AnimLab.KonoSuba.EditorTools
             catch (Exception e) { Debug.LogError("VFXCapture: falhou a comparação (" + e.Message + ")"); }
         }
 
+        // Consola de admin (F6): "frame:comando|frame:comando"; abre-a no primeiro e escreve cada comando no seu frame.
+        static void AdminStep(string plan)
+        {
+            var hud = UnityEngine.Object.FindFirstObjectByType<GameHud>();
+            if (hud == null || hud.Admin == null) return;
+            foreach (string step in plan.Split('|'))
+            {
+                int colon = step.IndexOf(':');
+                if (colon <= 0 || !int.TryParse(step.Substring(0, colon), out int at) || at != index) continue;
+                hud.Admin.Open();
+                hud.Admin.Execute(step.Substring(colon + 1));
+            }
+        }
+
         static void SkillsStep()
         {
             var hud = UnityEngine.Object.FindFirstObjectByType<GameHud>();
-            var stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
+            var stats = GameHud.LocalPlayer<CharacterStats>();
             if (hud == null || hud.Trees == null || stats == null) return;
             if (index == 0) { stats.ResetTrees(); hud.Trees.SetOpen(true); }
             if (index == 1) hud.Trees.Preview(AbilityElement.Lightning, AbilityElement.Fire);
@@ -335,12 +352,27 @@ namespace AnimLab.KonoSuba.EditorTools
         }
 
         // No fim: a hotbar, as árvores e o estilo voltam ao que eram (não ficam nas PlayerPrefs do jogo).
+        // As preferências de progresso do jogador (hotbar, árvores, estilo) tal como estavam antes da gravação.
+        static readonly string[] IntKeys = { "AnimLab.SkillTrees.A", "AnimLab.SkillTrees.B", "AnimLab.SkillTrees.Points", "AnimLab.SkillTrees.Style" };
+        static readonly string[] StringKeys = { "AnimLab.SkillTrees.Learned", "AnimLab.Hotbar.0", "AnimLab.Hotbar.1", "AnimLab.Hotbar.2",
+            "AnimLab.Hotbar.3", "AnimLab.Hotbar.4", "AnimLab.Hotbar.5", "AnimLab.Hotbar.6", "AnimLab.Hotbar.7", "AnimLab.Hotbar.8" };
+        static readonly System.Collections.Generic.Dictionary<string, object> savedProgress = new System.Collections.Generic.Dictionary<string, object>();
+        static void SaveProgress()
+        {
+            savedProgress.Clear();
+            foreach (string k in IntKeys) savedProgress[k] = PlayerPrefs.HasKey(k) ? (object)PlayerPrefs.GetInt(k) : null;
+            foreach (string k in StringKeys) savedProgress[k] = PlayerPrefs.HasKey(k) ? PlayerPrefs.GetString(k) : null;
+        }
+        // No fim volta exatamente ao que estava (não "limpa": o jogador pode ter a sua hotbar e as suas árvores).
         static void RestoreProgress()
         {
-            var stats = UnityEngine.Object.FindFirstObjectByType<CharacterStats>();
-            var bar = UnityEngine.Object.FindFirstObjectByType<AbilityBar>();
-            if (bar != null) for (int i = 0; i < 9; i++) bar.Clear(i);
-            if (stats != null) { stats.ResetTrees(); stats.SetSwordStyle(SwordStyle.Knight); }
+            foreach (var kv in savedProgress)
+            {
+                if (kv.Value == null) PlayerPrefs.DeleteKey(kv.Key);
+                else if (kv.Value is int i) PlayerPrefs.SetInt(kv.Key, i);
+                else PlayerPrefs.SetString(kv.Key, (string)kv.Value);
+            }
+            PlayerPrefs.Save();
         }
 
         // Player guiado pela gravação (sem teclado), semente fixa e callouts no log.

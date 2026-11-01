@@ -18,6 +18,9 @@ namespace AnimLab.Netcode.Sim
                 p.Health=Fix.Min(p.Config.MaxHealth,p.Health+p.Config.MaxHealth*p.Config.RefillRate*Dt);
             if (p.Poise<p.Config.MaxPoise && p.BodyTime-p.LastHitAt>F(150)) p.Poise=Fix.Min(p.Config.MaxPoise,p.Poise+60*Dt);
             if (p.Mana<p.Config.MaxMana) p.Mana=Fix.Min(p.Config.MaxMana,p.Mana+p.Config.ManaRegen*Dt);
+            // Stamina: só recupera depois de uma pausa sem gastar (mais longa se esgotou); a guardar, a metade.
+            if (p.Stamina<p.Config.MaxStamina && p.BodyTime-p.StaminaUsedAt>(p.HasStamina?SwordData.StaminaDelay:SwordData.ExhaustedDelay))
+                p.Stamina=Fix.Min(p.Config.MaxStamina,p.Stamina+p.Config.StaminaRegen*(p.Weapon==WeaponState.Guard?F(50):Fix.One)*Dt);
             TickStatuses(ref p);
             FixVec3 step=p.Knock*Dt;
             if (p.KnockAirborne) { p.KnockUp+=F(-981,100)*Dt; step.Y=p.KnockUp*Dt; }
@@ -26,7 +29,7 @@ namespace AnimLab.Netcode.Sim
                 p.Position.Y=0; p.KnockAirborne=false; p.KnockUp=0;
                 events.Add(s.Tick,EventKind.Land,id,id,p.Position,FixVec3.Up);
             }
-            p.Knock=FixVec3.MoveTowards(p.Knock,FixVec3.Zero,(p.KnockAirborne?2:12)*Dt);
+            p.Knock=FixVec3.MoveTowards(p.Knock,FixVec3.Zero,(p.KnockAirborne?2:p.Weapon==WeaponState.Recoil?SwordData.RecoilBrake:12)*Dt);
             Bounds(ref p);
         }
         static void TickWeapon(ref MatchState s,int id,PlayerInput input)
@@ -36,19 +39,21 @@ namespace AnimLab.Netcode.Sim
             FixVec3 target=hasTarget?MatchState.Player(ref s,targetId).Position:FixVec3.Zero;
             ref PlayerState p=ref MatchState.Player(ref s,id);
             bool busy=p.Motion==Motion.Roll || p.Motion==Motion.Plunge || p.BodyTime<p.LandLagUntil;
-            bool guard=input.Has(Buttons.Guard) && !busy;
-            if (input.Has(Buttons.Attack) && p.Motion==Motion.Ground && !busy && !p.Staggered)
+            bool guard=input.Has(Buttons.Guard) && !busy && !p.Hurt;
+            if (input.Has(Buttons.Attack) && p.Motion==Motion.Ground && !busy && !p.Hurt)
             {
+                // Na pausa do fim do combo, o clique perde-se; a meio do golpe, só conta da metade em diante.
                 if (p.Weapon==WeaponState.Idle || p.Weapon==WeaponState.Guard) {
-                    if (p.Weapon==WeaponState.Guard) p.GuardReleasedAt=p.BodyTime;
-                    int next=p.BodyTime-p.IdleSince<F(25) && p.Swing<SwordData.Count(p.Config.Style)-1?p.Swing+1:0;
-                    StartSwing(ref p,next,hasTarget,target,input.Targeted);
+                    if (!Resting(p)) {
+                        if (p.Weapon==WeaponState.Guard) p.GuardReleasedAt=p.BodyTime;
+                        int next=p.BodyTime-p.IdleSince<F(25) && p.Swing<SwordData.Count(p.Config.Style)-1?p.Swing+1:0;
+                        StartSwing(ref p,next,hasTarget,target,input.Targeted);
+                    }
                 }
-                else if (p.Weapon==WeaponState.Windup || p.Weapon==WeaponState.Active || p.Weapon==WeaponState.Recovery)
-                    p.Queued=p.Swing<SwordData.Count(p.Config.Style)-1;
+                else if (CanQueue(p)) p.Queued=p.Swing<SwordData.Count(p.Config.Style)-1;
             }
             if (p.Staggered && p.Weapon!=WeaponState.Idle) { p.Weapon=WeaponState.Idle; p.IdleSince=-9; }
-            Fix dt=Dt*(p.Attacking?Fix.Max(F(10),p.Config.AttackSpeed):Fix.One);
+            Fix dt=Dt*(p.Attacking?SwingRate(p):Fix.One);
             SwingData sw=SwordData.Get(p.Config.Style,p.Swing);
             p.WeaponTime+=dt;
             switch(p.Weapon)
@@ -61,10 +66,14 @@ namespace AnimLab.Netcode.Sim
                     if(p.WeaponTime>=sw.Active) { p.Weapon=WeaponState.Recovery; p.WeaponTime-=sw.Active; }
                     break;
                 case WeaponState.Recovery:
-                    if(p.Queued && p.WeaponTime>=sw.Recovery*F(35)) StartSwing(ref p,p.Swing+1,hasTarget,target,input.Targeted);
-                    else if(guard && p.WeaponTime>=sw.Recovery*F(50)) EnterGuard(ref p);
-                    else if(p.WeaponTime>=sw.Recovery) { p.Weapon=WeaponState.Idle; p.IdleSince=p.BodyTime; }
+                {
+                    // Golpe falhado (não tocou em ninguém): recuperação inteira, sem cortar para o golpe seguinte nem para a guarda.
+                    bool whiff=p.StruckMask==0;
+                    if(p.Queued && p.WeaponTime>=sw.Recovery*(whiff?Fix.One:F(35))) StartSwing(ref p,p.Swing+1,hasTarget,target,input.Targeted);
+                    else if(guard && !whiff && p.WeaponTime>=sw.Recovery*F(50)) { EndSwing(ref p); EnterGuard(ref p); }
+                    else if(p.WeaponTime>=sw.Recovery) { p.Weapon=WeaponState.Idle; EndSwing(ref p); }
                     break;
+                }
                 case WeaponState.Guard:
                     if(!guard || p.Staggered) { p.Weapon=WeaponState.Idle; p.GuardReleasedAt=p.BodyTime; }
                     break;
@@ -78,8 +87,24 @@ namespace AnimLab.Netcode.Sim
             if(p.Weapon==WeaponState.Idle && guard && !p.Staggered) EnterGuard(ref p);
             p.SuperArmor=p.Config.Style==Style.Greatsword && (p.Weapon==WeaponState.Windup || p.Weapon==WeaponState.Active);
         }
+        /// <summary>O clique para o golpe seguinte conta (da metade da fase ativa em diante).</summary>
+        public static bool CanQueue(in PlayerState p) => p.Weapon==WeaponState.Recovery ||
+            p.Weapon==WeaponState.Active && p.WeaponTime>=SwordData.Get(p.Config.Style,p.Swing).Active*SwordData.QueueFrom;
+        /// <summary>Pausa depois do último golpe do combo: ainda não pode recomeçar.</summary>
+        public static bool Resting(in PlayerState p) =>
+            p.Swing==SwordData.Count(p.Config.Style)-1 && p.BodyTime-p.IdleSince<SwordData.ComboRest;
+        /// <summary>Gasta stamina (nunca abaixo de zero) e adia a recuperação.</summary>
+        public static void Spend(ref PlayerState p,Fix amount) { p.Stamina=Fix.Max(0,p.Stamina-amount); p.StaminaUsedAt=p.BodyTime; }
+        // O golpe acabou (para o encadeamento e para a pausa do fim do combo).
+        static void EndSwing(ref PlayerState p) { p.IdleSince=p.BodyTime; }
+        /// <summary>Ritmo do golpe em curso: Attack Speed, e mais devagar se começou sem stamina.</summary>
+        public static Fix SwingRate(in PlayerState p) =>
+            Fix.Max(F(10),p.Config.AttackSpeed)/(p.TiredSwing?SwordData.TiredSlowdown:Fix.One);
         static void StartSwing(ref PlayerState p,int index,bool hasTarget,FixVec3 target,bool selected)
         {
+            Fix cost=SwordData.Get(p.Config.Style,index).Stamina;
+            p.TiredSwing=p.Stamina<cost;
+            Spend(ref p,cost);
             p.Swing=index; p.Weapon=WeaponState.Windup; p.WeaponTime=0; p.Queued=false; p.StruckMask=0;
             if(!hasTarget) return;
             FixVec3 d=(target-p.Position).Flat;
@@ -90,6 +115,11 @@ namespace AnimLab.Netcode.Sim
             p.Weapon=WeaponState.Guard; p.WeaponTime=0; p.GuardSince=p.BodyTime;
             p.ParryArmed=p.BodyTime-p.GuardReleasedAt>F(35); p.Queued=false;
         }
+        /// <summary>Tempo real desde que a lâmina começou a cortar (o pique conta sempre como a tempo).</summary>
+        static Fix SinceActive(in PlayerState p) => p.Weapon==WeaponState.Plunge?Fix.Zero:p.WeaponTime/SwingRate(p);
+        /// <summary>As duas lâminas começaram a cortar quase ao mesmo tempo: só aí o cruzamento dá clash.</summary>
+        public static bool InSync(in PlayerState a,in PlayerState b) =>
+            a.Weapon==WeaponState.Plunge || b.Weapon==WeaponState.Plunge || Fix.Abs(SinceActive(a)-SinceActive(b))<=SwordData.ClashWindow;
         static bool Swinging(in PlayerState p) => p.Weapon==WeaponState.Active || p.Weapon==WeaponState.Plunge && p.PlungePhase==1;
         public static void Recoil(ref PlayerState p,Fix seconds) {
             p.Weapon=WeaponState.Recoil; p.WeaponTime=0; p.RecoilFor=seconds; p.Queued=false; p.IdleSince=-9; p.SuperArmor=false;
@@ -119,6 +149,7 @@ namespace AnimLab.Netcode.Sim
             if(elemental) damage*=1-Fix.Clamp(p.Config.ElementResist(element),0,F(80));
             p.Health=Fix.Max(0,p.Health-damage); p.LastHitAt=p.BodyTime;
             Fix push=1;
+            poise*=SwordData.StaggerTaken(p.Config.Style);
             if(p.SuperArmor) { poise*=F(25); push=F(30); }
             if(poise>0) {
                 p.Poise-=poise;
@@ -156,7 +187,7 @@ namespace AnimLab.Netcode.Sim
                 if(b.ParryArmed && b.BodyTime-b.GuardSince<=window)
                 {
                     a.Weapon=WeaponState.Idle; a.IdleSince=-9; a.Queued=false; a.SuperArmor=false;
-                    Stagger(ref s,attacker,F(110),events,target); Knock(ref a,-dir*3); Stop(ref s,F(12));
+                    Stagger(ref s,attacker,SwordData.ParryStun,events,target); Knock(ref a,-dir*3); Stop(ref s,F(12));
                     events.Add(s.Tick,EventKind.Parry,attacker,target,point,-dir,visualStop:F(12));
                 }
                 else if(a.Config.Style==Style.Greatsword && a.Swing==SwordData.Count(a.Config.Style)-1)
@@ -168,11 +199,12 @@ namespace AnimLab.Netcode.Sim
                 }
                 else
                 {
-                    bool was=b.Staggered;
+                    // Bloquear gasta stamina (não postura); quando acaba, a guarda parte.
                     Fix d=Damage(ref s,attacker,target,sw.Damage*a.Config.DamageScale*(1-b.Config.BlockReduction),
-                        sw.Stagger*a.Config.StaggerScale*F(60),dir*sw.Push*F(45),point,events);
-                    bool broken=!was && b.Staggered;
-                    if(broken) b.Weapon=WeaponState.Idle;
+                        0,dir*sw.Push*F(45),point,events);
+                    Spend(ref b,sw.Stagger*a.Config.StaggerScale*SwordData.BlockStamina);
+                    bool broken=!b.HasStamina && !b.Staggered;
+                    if(broken) { b.Weapon=WeaponState.Idle; Stagger(ref s,target,F(70),events,attacker); }
                     if(a.Config.Style!=Style.Greatsword) Recoil(ref a,F(22));
                     Stop(ref s,F(5));
                     events.Add(s.Tick,broken?EventKind.GuardBreak:EventKind.Block,attacker,target,point,dir,d,visualStop:F(5));
@@ -184,10 +216,19 @@ namespace AnimLab.Netcode.Sim
             if(push<0) push*=Fix.Clamp01((away.Length-F(140))/F(60));
             Fix dealt=Damage(ref s,attacker,target,sw.Damage*a.Config.DamageScale*(crit?a.Config.CritDamage:Fix.One),
                 sw.Stagger*a.Config.StaggerScale,dir*push+FixVec3.Up*sw.Lift,point,events);
-            if(b.Attacking && b.Staggered) { b.Weapon=WeaponState.Idle; b.Queued=false; b.IdleSince=-9; b.SuperArmor=false; }
+            Flinch(ref b);
             Stop(ref s,sw.HitStop);
             bool heavy=a.Weapon==WeaponState.Plunge || a.Swing==SwordData.Count(a.Config.Style)-1;
             events.Add(s.Tick,EventKind.Hit,attacker,target,point,dir,dealt,crit,sw.HitStop,run.Normalized+dir*F(50),heavy);
+        }
+        /// <summary>Um golpe entrou: o alvo perde o seu golpe e fica um instante sem agir (o super armor aguenta, salvo em stagger).</summary>
+        static void Flinch(ref PlayerState b)
+        {
+            if(b.SuperArmor && !b.Staggered) return;
+            b.HurtUntil=Fix.Max(b.HurtUntil,b.BodyTime+SwordData.Flinch*SwordData.StaggerTaken(b.Config.Style));
+            if(b.Attacking && !(b.Weapon==WeaponState.Plunge && b.PlungePhase==2)) {
+                b.Weapon=WeaponState.Idle; b.Queued=false; b.IdleSince=-9; b.SuperArmor=false;
+            }
         }
         /// <summary>Atalho 1v1 dos testes.</summary>
         public static void Clash(ref MatchState s,int attacker,FixVec3 at,EventBuffer events) => Clash(ref s,attacker,attacker==0?1:0,at,events);
@@ -198,8 +239,8 @@ namespace AnimLab.Netcode.Sim
             ref PlayerState a=ref MatchState.Player(ref s,lo); ref PlayerState b=ref MatchState.Player(ref s,hi);
             FixVec3 apart=(a.Position-b.Position).Flat;
             apart=apart.LengthSquared>F(1,10000)?apart.Normalized:-a.Forward;
-            Recoil(ref a,F(42)); Recoil(ref b,F(42));
-            Knock(ref a,apart*F(350)); Knock(ref b,-apart*F(350)); Stop(ref s,F(14));
+            Recoil(ref a,SwordData.ClashRecoil); Recoil(ref b,SwordData.ClashRecoil);
+            Knock(ref a,apart*SwordData.ClashPush); Knock(ref b,-apart*SwordData.ClashPush); Stop(ref s,F(14));
             // Direção do lado de quem detetou o clash, como no offline (as faíscas de cada cor saem para o seu lado).
             events.Add(s.Tick,EventKind.Clash,detector,other,at,detector==lo?apart:-apart,visualStop:F(14));
         }
@@ -223,7 +264,7 @@ namespace AnimLab.Netcode.Sim
                 {
                     if(!MatchState.Hostile(ref s,id,j)) continue;
                     ref PlayerState b=ref MatchState.Player(ref s,j);
-                    if(Swinging(b))
+                    if(Swinging(b) && InSync(a,b))
                     {
                         SwordGeometry.Blade(b,b.Weapon==WeaponState.Plunge?Fix.Zero:SwordData.ArcU(b),out FixVec3 q0,out FixVec3 q1);
                         if(SwordGeometry.SegmentDistance(b0,b1,q0,q1,out FixVec3 at)<=F(14)) {

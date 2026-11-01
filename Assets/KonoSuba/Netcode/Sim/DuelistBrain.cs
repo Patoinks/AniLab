@@ -49,7 +49,7 @@ namespace AnimLab.Netcode.Sim
         /// <summary>Tempo até o golpe do lutador chegar (como SwordWielder.TimeToImpact).</summary>
         public static Fix TimeToImpact(in PlayerState p)
         {
-            Fix k = Fix.Max(F(10), p.Config.AttackSpeed);
+            Fix k = World.SwingRate(p);
             if (p.Weapon == WeaponState.Plunge)
                 return p.PlungePhase == 0 ? Fix.Max(0, SwordData.Plunge.Windup - p.WeaponTime) + F(15) : p.PlungePhase == 1 ? F(10) : Fix.Zero;
             SwingData sw = SwordData.Get(p.Config.Style, p.Swing);
@@ -111,8 +111,8 @@ namespace AnimLab.Netcode.Sim
             if (dist > ai.AggroRange) { ai.ComboLeft = 0; return Look(self, opp.Position, FixVec3.Zero, 0, oppId); }
             bool lowHealth = self.Health < self.Config.MaxHealth * F(30);
 
-            // Em stagger ou a ressaltar não decide nada.
-            if (self.Staggered || self.Weapon == WeaponState.Recoil)
+            // Em stagger, a sentir um golpe ou a ressaltar não decide nada.
+            if (self.Hurt || self.Weapon == WeaponState.Recoil)
             {
                 ai.ComboLeft = 0;
                 ai.GuardUntil = Fix.Min(ai.GuardUntil, now);
@@ -166,8 +166,9 @@ namespace AnimLab.Netcode.Sim
             if (Unit(ref ai) < (1 - ai.Skill) * F(30)) return;
             Fix r = Unit(ref ai);
             Fix pParry = ai.Skill * F(50);
-            Fix pTrade = self.Attacking || lowHealth ? Fix.Zero : ai.Aggression * F(18);
-            Fix pBack = F(12) * hp;
+            Fix pTrade = self.Attacking || lowHealth || !Affords(self, 1) ? Fix.Zero : ai.Aggression * F(18);
+            // Com pouca stamina, bloquear parte a guarda: prefere recuar.
+            Fix pBack = F(12) * hp + (self.Stamina < self.Config.MaxStamina * F(25) ? F(40) : Fix.Zero);
             if (r < pParry)
             {
                 // Parry: carrega na guarda pouco antes do impacto. Quanto mais skill, mais certinho.
@@ -196,11 +197,13 @@ namespace AnimLab.Netcode.Sim
             // Castigar: adversário aberto e perto.
             bool open = opp.Staggered || opp.Weapon == WeaponState.Recoil
                         || opp.Weapon == WeaponState.Recovery && opp.Swing == SwordData.Count(opp.Config.Style) - 1;
-            if (open && dist < ai.AttackRange + F(90))
+            if (open && dist < ai.AttackRange + F(90) && Affords(self, 1))
             {
-                StartCombo(ref ai, now + Range(ref ai, ai.ReactMin, ai.ReactMax) * F(80), Unit(ref ai) < F(60) ? 3 : 2);
+                StartCombo(ref ai, now + Range(ref ai, ai.ReactMin, ai.ReactMax) * F(80), Fit(self, Unit(ref ai) < F(60) ? 3 : 2));
                 return;
             }
+            // Cansado: afasta-se para recuperar a stamina antes de voltar a entrar.
+            if (self.Stamina < self.Config.MaxStamina * F(35)) { ai.RetreatUntil = Fix.Max(ai.RetreatUntil, now + F(40)); return; }
             if (now < ai.RetreatUntil || now < ai.BackstepUntil) return;
             bool oppGuarding = opp.Weapon == WeaponState.Guard;
             if (ai.NextAttackWish <= 0)
@@ -210,8 +213,8 @@ namespace AnimLab.Netcode.Sim
                 if (oppGuarding) wait *= F(130);
                 ai.NextAttackWish = now + wait;
             }
-            if (dist < ai.AttackRange + F(25) && Unit(ref ai) < ai.Aggression * F(50)) StartCombo(ref ai, now, PickComboLength(ref ai, lowHealth));
-            else if (now >= ai.NextAttackWish && dist < ai.FootsieRange + F(80)) StartCombo(ref ai, now + Range(ref ai, F(8), F(25)), PickComboLength(ref ai, lowHealth));
+            if (dist < ai.AttackRange + F(25) && Unit(ref ai) < ai.Aggression * F(50)) StartCombo(ref ai, now, Fit(self, PickComboLength(ref ai, lowHealth)));
+            else if (now >= ai.NextAttackWish && dist < ai.FootsieRange + F(80)) StartCombo(ref ai, now + Range(ref ai, F(8), F(25)), Fit(self, PickComboLength(ref ai, lowHealth)));
             else if (Unit(ref ai) < F(4) + ai.Skill * F(4))
             {
                 // Finta: entra depressa e sai, para arrancar um golpe ou um parry ao adversário.
@@ -220,6 +223,18 @@ namespace AnimLab.Netcode.Sim
             }
         }
 
+        // Stamina para os primeiros golpes de um combo (a começar do início).
+        static bool Affords(in PlayerState self, int hits)
+        {
+            Fix cost = 0;
+            for (int i = 0; i < hits - 1; i++) cost += SwordData.Get(self.Config.Style, i).Stamina;
+            return self.Stamina > cost; // o último só precisa de haver alguma
+        }
+        static int Fit(in PlayerState self, int hits)
+        {
+            while (hits > 1 && !Affords(self, hits)) hits--;
+            return hits;
+        }
         static int PickComboLength(ref AiState ai, bool lowHealth)
         {
             Fix r = Unit(ref ai);
@@ -240,12 +255,16 @@ namespace AnimLab.Netcode.Sim
             {
                 if (ai.AttackAt < 0 || now < ai.AttackAt) return false;
                 if (dist > ai.AttackRange + F(10)) { if (now > ai.AttackAt + F(120)) ai.ComboLeft = 0; return false; }
+                if (!self.HasStamina) { ai.ComboLeft = 0; return false; }
+                if (World.Resting(self)) return false; // espera o fim da pausa do combo
                 guard = false;
                 ai.ComboLeft--; ai.AttackAt = -1;
                 ai.NextPressAt = now + Range(ref ai, F(10), F(30));
                 return true;
             }
-            if (now < ai.NextPressAt) return false;
+            // O clique seguinte só conta da metade do golpe em diante: espera por lá (um humano sente o ritmo).
+            if (now < ai.NextPressAt || !World.CanQueue(self)) return false;
+            if (!self.HasStamina) { ai.ComboLeft = 0; return false; }
             // Se o adversário está a guardar, às vezes corta o combo (para não bater na guarda à toa).
             if (opp.Weapon == WeaponState.Guard && Unit(ref ai) < F(35) + ai.Skill * F(25))
             {

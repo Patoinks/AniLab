@@ -6,7 +6,7 @@ namespace AnimLab.Netcode.Sim
     /// <summary>Formato canónico explícito, independente de padding, plataforma e GetHashCode.</summary>
     public static class StateCodec
     {
-        public const int Version = 8;
+        public const int Version = 10;
         public static byte[] Encode(in MatchState state)
         {
             var s = state;
@@ -104,6 +104,8 @@ namespace AnimLab.Netcode.Sim
             w.Write(c.ResistAsphyxia.Raw);
             w.Write(c.ResistBurning.Raw);
             w.Write(c.ResistBlind.Raw);
+            w.Write(c.MaxStamina.Raw);
+            w.Write(c.StaminaRegen.Raw);
         }
         static PlayerConfig ReadConfig(BinaryReader r)
         {
@@ -171,6 +173,8 @@ namespace AnimLab.Netcode.Sim
             c.ResistAsphyxia = Fix.FromRaw(r.ReadInt64());
             c.ResistBurning = Fix.FromRaw(r.ReadInt64());
             c.ResistBlind = Fix.FromRaw(r.ReadInt64());
+            c.MaxStamina = Fix.FromRaw(r.ReadInt64());
+            c.StaminaRegen = Fix.FromRaw(r.ReadInt64());
             return c;
         }
         static void WriteTable(BinaryWriter w, AbilityTable t)
@@ -274,6 +278,9 @@ namespace AnimLab.Netcode.Sim
             w.Write(p.StaggerUntil.Raw);
             w.Write(p.LastHitAt.Raw);
             w.Write(p.BodyTime.Raw);
+            w.Write(p.Stamina.Raw);
+            w.Write(p.StaminaUsedAt.Raw);
+            w.Write(p.HurtUntil.Raw);
             w.Write(p.RollJumpQueued);
             w.Write(p.LongJump);
             w.Write(p.Dived);
@@ -281,6 +288,7 @@ namespace AnimLab.Netcode.Sim
             w.Write(p.KnockAirborne);
             w.Write(p.Queued);
             w.Write(p.ParryArmed);
+            w.Write(p.TiredSwing);
             w.Write(p.StruckMask);
             w.Write((byte)p.Kind);
             w.Write(p.Team);
@@ -350,6 +358,9 @@ namespace AnimLab.Netcode.Sim
             p.StaggerUntil = Fix.FromRaw(r.ReadInt64());
             p.LastHitAt = Fix.FromRaw(r.ReadInt64());
             p.BodyTime = Fix.FromRaw(r.ReadInt64());
+            p.Stamina = Fix.FromRaw(r.ReadInt64());
+            p.StaminaUsedAt = Fix.FromRaw(r.ReadInt64());
+            p.HurtUntil = Fix.FromRaw(r.ReadInt64());
             p.RollJumpQueued = r.ReadBoolean();
             p.LongJump = r.ReadBoolean();
             p.Dived = r.ReadBoolean();
@@ -357,6 +368,7 @@ namespace AnimLab.Netcode.Sim
             p.KnockAirborne = r.ReadBoolean();
             p.Queued = r.ReadBoolean();
             p.ParryArmed = r.ReadBoolean();
+            p.TiredSwing = r.ReadBoolean();
             p.StruckMask = r.ReadUInt16();
             p.Kind = (FighterKind)r.ReadByte();
             p.Team = r.ReadByte();

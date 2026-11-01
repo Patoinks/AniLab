@@ -47,6 +47,9 @@ namespace AnimLab.KonoSuba
         {
             Vector3 dir = ctx.moveDirection.sqrMagnitude > 0.01f ? ctx.moveDirection : Flat(ctx.caster.forward);
             if (dir.sqrMagnitude < 0.01f) return false;
+            // Também gasta stamina (a mesma regra da simulação).
+            var body = ctx.caster.GetComponent<Combatant>();
+            if (body != null) body.SpendStamina(AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.DashStamina));
             StartCoroutine(Dash(dir.normalized));
             return true;
         }

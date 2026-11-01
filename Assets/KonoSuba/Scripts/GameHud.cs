@@ -167,6 +167,7 @@ namespace AnimLab.KonoSuba
             {
                 if (instance != null && instance.settingsMenu != null && instance.settingsMenu.IsBlockingInput) return true;
                 if (instance != null && instance.onlineMenu != null && instance.onlineMenu.IsBlockingInput) return true;
+                if (instance != null && instance.adminConsole != null && instance.adminConsole.IsBlockingInput) return true;
                 IPanel panel = instance != null ? instance.GetComponent<UIDocument>().rootVisualElement?.panel : null;
                 if (panel == null) return false;
                 Vector2 screen = new Vector2(Input.mousePosition.x, Screen.height - Input.mousePosition.y);
@@ -174,6 +175,9 @@ namespace AnimLab.KonoSuba
                 return picked != null && picked != instance.GetComponent<UIDocument>().rootVisualElement;
             }
         }
+
+        /// <summary>Consola de admin (F6).</summary>
+        public AdminConsole Admin => adminConsole;
 
         /// <summary>Janela das árvores de habilidades (tecla V).</summary>
         public SkillTreeWindow Trees => skillTrees;
@@ -196,13 +200,18 @@ namespace AnimLab.KonoSuba
 
         FontDefinition font;
         bool hasFont; // sem fonte do sistema, fica a do tema por defeito
-        GlowBar healthBar, manaBar;
+        GlowBar healthBar, manaBar, staminaBar;
+        static readonly Color StaminaColor = new Color(0.74f, 0.9f, 0.46f);
+        static readonly Color TiredColor = new Color(1f, 0.5f, 0.32f);
+        float stamina01 = 1f;
         CombatOverlay combat;
         StatsWindow statsWindow;
         SettingsMenu settingsMenu;
+        AdminConsole adminConsole;
         AnimLab.Netcode.Unity.OnlineMenu onlineMenu;
         SkillTreeWindow skillTrees;
         CharacterStats playerStats;
+        Combatant playerBody;
         bool inOnlineMatch;
         Label healthText, manaText;
         readonly VisualElement[] slots = new VisualElement[9];
@@ -238,6 +247,8 @@ namespace AnimLab.KonoSuba
             statsWindow = new StatsWindow(this, root);
             skillTrees = new SkillTreeWindow(this, root);
             settingsMenu = new SettingsMenu(this, root);
+            // Consola de admin (F6), se a tecla não estiver atribuída a uma ação do jogo.
+            adminConsole = new AdminConsole(this, root, () => !GameInput.IsBound(KeyCode.F6));
             // O atalho novo não rouba uma tecla já configurada para jogar.
             onlineMenu = new AnimLab.Netcode.Unity.OnlineMenu(root, MakeLabel, () =>
                 !System.Array.Exists((GameAction[])System.Enum.GetValues(typeof(GameAction)), a => GameInput.Key(a) == KeyCode.F8));
@@ -252,6 +263,8 @@ namespace AnimLab.KonoSuba
             GameInput.Rebound -= RefreshBinding;
             settingsMenu?.Dispose();
             settingsMenu = null;
+            adminConsole?.Dispose();
+            adminConsole = null;
             combat?.Dispose();
             combat = null;
         }
@@ -259,9 +272,11 @@ namespace AnimLab.KonoSuba
         void Update()
         {
             settingsMenu?.Update();
+            adminConsole?.Update();
             onlineMenu?.Update();
-            // As duas janelas partilham a suspensão sem restaurar o estado uma da outra.
-            GameInput.Suspended = (settingsMenu != null && settingsMenu.IsBlockingInput) || (onlineMenu != null && onlineMenu.IsBlockingInput);
+            // As janelas partilham a suspensão sem restaurar o estado umas das outras.
+            GameInput.Suspended = (settingsMenu != null && settingsMenu.IsBlockingInput) || (onlineMenu != null && onlineMenu.IsBlockingInput)
+                || (adminConsole != null && adminConsole.IsBlockingInput);
             AnimLab.Netcode.Unity.NetMatch.InputBlocked = GameInput.Suspended;
             AnimLab.Netcode.Unity.NetMatch.KeyTaken ??= GameInput.IsBound;
             var net = AnimLab.Netcode.Unity.NetMatch.Active;
@@ -271,6 +286,8 @@ namespace AnimLab.KonoSuba
                 maxHealth = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxHealth);
                 mana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Mana);
                 maxMana = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxMana);
+                stamina01 = AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Stamina)
+                    / Mathf.Max(1f, AnimLab.Netcode.Unity.ViewConvert.Number(net.LocalState.Config.MaxStamina));
                 inOnlineMatch = true;
             }
             else if (inOnlineMatch)
@@ -323,6 +340,15 @@ namespace AnimLab.KonoSuba
             VisualElement manaRow = BarRow(false, out manaBar, out manaText);
             manaRow.style.marginTop = 6;
             box.Add(manaRow);
+
+            // Stamina: barra fina por baixo da mana, alinhada com as outras (sem emblema nem números).
+            staminaBar = new GlowBar(StaminaColor, 2f, 8.3f);
+            glowing.Add(staminaBar);
+            staminaBar.style.width = 180;
+            staminaBar.style.height = 14;
+            staminaBar.style.marginLeft = 26;
+            staminaBar.style.marginTop = 4;
+            box.Add(staminaBar);
         }
 
         VisualElement BarRow(bool isHealth, out GlowBar bar, out Label text)
@@ -357,6 +383,15 @@ namespace AnimLab.KonoSuba
             else manaBar.SetColors(ManaColor, ManaColor);
             healthBar.SetValue(health / Mathf.Max(maxHealth, 1f));
             manaBar.SetValue(mana / Mathf.Max(maxMana, 1f));
+            if (!inOnlineMatch)
+            {
+                if (playerBody == null) playerBody = LocalPlayer<Combatant>();
+                if (playerBody != null) stamina01 = playerBody.Stamina01;
+            }
+            // Pouca stamina: a barra aquece para avisar que a guarda está por um fio.
+            Color sc = stamina01 < 0.25f ? TiredColor : StaminaColor;
+            staminaBar.SetColors(sc, sc);
+            staminaBar.SetValue(stamina01);
             healthText.text = $"{Mathf.CeilToInt(health)} / {Mathf.CeilToInt(maxHealth)}";
             manaText.text = $"{Mathf.CeilToInt(mana)} / {Mathf.CeilToInt(maxMana)}";
         }

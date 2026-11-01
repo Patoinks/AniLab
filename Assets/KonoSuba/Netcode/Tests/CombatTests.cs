@@ -30,7 +30,7 @@ namespace AnimLab.Netcode.Tests
             World.Strike(ref s,0,new FixVec3(0,1,1),e);
             Assert.IsTrue(s.P0.Staggered); Assert.AreEqual((Fix)400,s.P1.Health);
             Assert.AreEqual(WeaponState.Idle,s.P0.Weapon); Assert.IsTrue(Has(e,EventKind.Parry));
-            Assert.AreEqual(Fix.Ratio(11,10),s.P0.StaggerUntil);
+            Assert.AreEqual(SwordData.ParryStun,s.P0.StaggerUntil);
         }
         [Test] public void BlockCutsEightyPercentAndReboundsAttacker()
         {
@@ -51,7 +51,18 @@ namespace AnimLab.Netcode.Tests
             World.Clash(ref s,0,FixVec3.Up,e);
             Assert.AreEqual(WeaponState.Recoil,s.P0.Weapon); Assert.AreEqual(WeaponState.Recoil,s.P1.Weapon);
             Assert.Less(FixVec3.Dot(s.P0.Knock,s.P1.Knock).Raw,0);
+            // Os dois são empurrados para longe um do outro.
+            Assert.Less(s.P0.Knock.Z.Raw,0); Assert.Greater(s.P1.Knock.Z.Raw,0);
+            Assert.Less(Fix.Abs(s.P0.Knock.Length-SwordData.ClashPush*s.P0.Config.KnockbackScale).Raw,64);
             Assert.AreEqual(9,s.P0.HitStop); Assert.IsTrue(Has(e,EventKind.Clash));
+        }
+        [Test] public void ClashOnlyWhenBothBladesStartedTogether()
+        {
+            var s=Pair(); s.P1.Weapon=WeaponState.Active;
+            s.P0.WeaponTime=Fix.Ratio(5,100); s.P1.WeaponTime=Fix.Ratio(8,100);
+            Assert.IsTrue(World.InSync(s.P0,s.P1));
+            s.P1.WeaponTime=s.P0.WeaponTime+SwordData.ClashWindow+Fix.Ratio(2,100); // um começou claramente antes
+            Assert.IsFalse(World.InSync(s.P0,s.P1));
         }
         [Test] public void RollAvoidsContactDuringInvulnerability()
         {
@@ -99,11 +110,115 @@ namespace AnimLab.Netcode.Tests
         [Test] public void AttackPressedDuringHitStopIsQueuedAfterTheFreeze()
         {
             var s=Pair(); var e=new EventBuffer();
+            s.P0.WeaponTime=SwordData.Get(Style.Knight,0).Active*SwordData.QueueFrom; // já na janela do golpe seguinte
             World.Strike(ref s,0,FixVec3.Up,e); int stop=s.P0.HitStop;
             for(int i=0;i<stop;i++) World.Step(ref s,new PlayerInput { Buttons=i==0?Buttons.Attack:0 },default,e);
             Assert.IsTrue((s.P0.BufferedEdges&Buttons.Attack)!=0);
             World.Step(ref s,default,default,e);
             Assert.IsTrue(s.P0.Queued); Assert.AreEqual(Buttons.None,s.P0.BufferedEdges);
+        }
+
+        // ------------------------------------------------------------------ Ritmo (anti-spam)
+        static void Run(ref MatchState s,int ticks,PlayerInput a=default)
+        {
+            var e=new EventBuffer();
+            for(int i=0;i<ticks;i++) World.Step(ref s,a,default,e);
+        }
+        [Test] public void HitInterruptsTheTargetsSwingAndFlinches()
+        {
+            var s=Pair(); var e=new EventBuffer(); s.P1.Weapon=WeaponState.Windup;
+            World.Strike(ref s,0,FixVec3.Up,e);
+            Assert.AreEqual(WeaponState.Idle,s.P1.Weapon); Assert.IsTrue(s.P1.Hurt); Assert.IsFalse(s.P1.Staggered);
+            // Durante o flinch não ataca nem guarda.
+            s.P0.Weapon=WeaponState.Idle; s.P0.HitStop=0; s.P1.HitStop=0;
+            World.Step(ref s,default,new PlayerInput { Buttons=Buttons.Attack|Buttons.Guard },e);
+            Assert.AreEqual(WeaponState.Idle,s.P1.Weapon);
+        }
+        [Test] public void GreatswordTakesLessStaggerAndReachesFurther()
+        {
+            var s=Pair(); var e=new EventBuffer(); s.P1.Config.Style=Style.Greatsword;
+            World.Strike(ref s,0,FixVec3.Up,e);
+            Fix lost=s.P1.Config.MaxPoise-s.P1.Poise, flinch=s.P1.HurtUntil-s.P1.BodyTime;
+            var k=Pair(); e=new EventBuffer();
+            World.Strike(ref k,0,FixVec3.Up,e);
+            Assert.Less(lost.Raw,(k.P1.Config.MaxPoise-k.P1.Poise).Raw);
+            Assert.Less(flinch.Raw,(k.P1.HurtUntil-k.P1.BodyTime).Raw);
+            // O arco do montante leva a mão mais longe do que o da Espada.
+            Fix u=Fix.Ratio(1,2);
+            Assert.Greater(SwordGeometry.Arc(Style.Greatsword,0,u,Fix.Ratio(3,10)).Hand.Length.Raw,
+                SwordGeometry.Arc(Style.Knight,0,u,Fix.Ratio(3,10)).Hand.Length.Raw);
+        }
+        [Test] public void GreatswordSuperArmorIsNotInterrupted()
+        {
+            var s=Pair(); var e=new EventBuffer();
+            s.P1.Config.Style=Style.Greatsword; s.P1.Weapon=WeaponState.Windup; s.P1.SuperArmor=true;
+            World.Strike(ref s,0,FixVec3.Up,e);
+            Assert.AreEqual(WeaponState.Windup,s.P1.Weapon); Assert.IsFalse(s.P1.Hurt);
+        }
+        [Test] public void SwingsSpendStaminaAndTiredSwingsAreSlower()
+        {
+            var s=Pair(); s.P0.Weapon=WeaponState.Idle;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.AreEqual(WeaponState.Windup,s.P0.Weapon); Assert.IsFalse(s.P0.TiredSwing);
+            Assert.AreEqual(s.P0.Config.MaxStamina-SwordData.Get(Style.Knight,0).Stamina,s.P0.Stamina);
+            Fix fresh=s.P0.WeaponTime;
+            // Sem stamina o golpe sai na mesma, mas 30% mais lento.
+            s=Pair(); s.P0.Weapon=WeaponState.Idle; s.P0.Stamina=5; s.P0.StaminaUsedAt=s.P0.BodyTime;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.AreEqual(WeaponState.Windup,s.P0.Weapon); Assert.IsTrue(s.P0.TiredSwing);
+            Assert.AreEqual(Fix.Zero,s.P0.Stamina);
+            Assert.Less(Fix.Abs(s.P0.WeaponTime*SwordData.TiredSlowdown-fresh).Raw,64);
+        }
+        [Test] public void StaminaRecoversOnlyAfterAPause()
+        {
+            var s=Pair(); s.P0.Weapon=WeaponState.Idle; s.P0.Stamina=50; s.P0.StaminaUsedAt=0;
+            Run(ref s,(int)(SwordData.StaminaDelay*60).Floor-2);
+            Assert.AreEqual((Fix)50,s.P0.Stamina);
+            Run(ref s,60);
+            Assert.Greater(s.P0.Stamina.Raw,((Fix)70).Raw);
+        }
+        [Test] public void EarlyClickIsLostAndLateClickChains()
+        {
+            var s=Pair(); s.P0.Weapon=WeaponState.Windup;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.IsFalse(s.P0.Queued);
+            s=Pair(); s.P0.WeaponTime=SwordData.Get(Style.Knight,0).Active*SwordData.QueueFrom;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.IsTrue(s.P0.Queued);
+        }
+        [Test] public void WhiffHasFullRecoveryWithoutGuardCancel()
+        {
+            SwingData sw=SwordData.Get(Style.Knight,0);
+            var s=Pair(); s.P0.Weapon=WeaponState.Recovery; s.P0.WeaponTime=sw.Recovery*Fix.Ratio(6,10); s.P0.StruckMask=0;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Guard });
+            Assert.AreEqual(WeaponState.Recovery,s.P0.Weapon);
+            s=Pair(); s.P0.Weapon=WeaponState.Recovery; s.P0.WeaponTime=sw.Recovery*Fix.Ratio(6,10); s.P0.StruckMask=2;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Guard });
+            Assert.AreEqual(WeaponState.Guard,s.P0.Weapon);
+            s=Pair(); s.P0.Weapon=WeaponState.Recovery; s.P0.WeaponTime=sw.Recovery*Fix.Ratio(6,10); s.P0.Queued=true;
+            Run(ref s,1);
+            Assert.AreEqual(WeaponState.Recovery,s.P0.Weapon); // falhou: o seguinte espera pelo fim
+        }
+        [Test] public void LastHitOfTheComboRestsBeforeRestarting()
+        {
+            int last=SwordData.Count(Style.Knight)-1;
+            var s=Pair(); s.P0.Weapon=WeaponState.Idle; s.P0.Swing=last; s.P0.IdleSince=s.P0.BodyTime;
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.AreEqual(WeaponState.Idle,s.P0.Weapon);
+            Run(ref s,(int)(SwordData.ComboRest*60).Ceil);
+            Run(ref s,1,new PlayerInput { Buttons=Buttons.Attack });
+            Assert.AreEqual(WeaponState.Windup,s.P0.Weapon); Assert.AreEqual(0,s.P0.Swing);
+        }
+        [Test] public void BlockingDrainsStaminaUntilTheGuardBreaks()
+        {
+            var s=Pair(); var e=new EventBuffer(); Guard(ref s,false);
+            World.Strike(ref s,0,new FixVec3(0,1,1),e);
+            Assert.Less(s.P1.Stamina.Raw,s.P1.Config.MaxStamina.Raw); Assert.AreEqual(WeaponState.Guard,s.P1.Weapon);
+            Assert.AreEqual(s.P1.Config.MaxPoise,s.P1.Poise); // bloquear não gasta postura
+            s=Pair(); e=new EventBuffer(); Guard(ref s,false); s.P1.Stamina=1;
+            World.Strike(ref s,0,new FixVec3(0,1,1),e);
+            Assert.IsTrue(s.P1.Staggered); Assert.AreEqual(WeaponState.Idle,s.P1.Weapon);
+            Assert.IsTrue(Enumerable.Range(0,e.Count).Any(i=>e[i].Kind==EventKind.GuardBreak));
         }
         [Test] public void GuardToggleLockoutDoesNotRearmParry()
         {

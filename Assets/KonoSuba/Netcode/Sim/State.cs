@@ -57,6 +57,8 @@ namespace AnimLab.Netcode.Sim
         public Fix JumpHeight, AirControl, RollDistance, RollDuration, RollCooldown, RollInvulFrom, RollInvulTo;
         public Fix LongJumpSpeed, LongJumpHeight, PlungeRaise, PlungeSpeed, PlungeHoming, PlungeMinHeight, PlungeRadius, PlungeDamage, PlungeRecovery;
         public Fix MaxHealth, Defense, MaxPoise, KnockbackScale, HealthRegen;
+        /// <summary>Stamina: golpes, roll, dash e bloqueios gastam; sem ela não ataca e a guarda parte.</summary>
+        public Fix MaxStamina, StaminaRegen;
         /// <summary>Recarga de vida do Combatant: depois de RefillDelay s sem levar, enche RefillRate×vida por segundo.</summary>
         public bool Refill;
         public Fix RefillDelay, RefillRate;
@@ -111,7 +113,8 @@ namespace AnimLab.Netcode.Sim
             DamageScale = Fix.Ratio(40,30), AttackSpeed = Fix.Ratio(1056,1000), CritChance = Fix.Ratio(58,1000),
             CritDamage = Fix.Ratio(1545,1000), StaggerScale = Fix.Ratio(109,100), BlockReduction = Fix.Ratio(8,10), ParryWindow = Fix.Ratio(2,10),
             Radius = Fix.Ratio(35,100), Height = Fix.Ratio(16,10), CenterY = Fix.Ratio(85,100), Style = Style.Knight,
-            MaxMana = 100, ManaRegen = 6, CastSpeed = 1, SpellPower = 1, AimHeight = Fix.Ratio(12,10)
+            MaxMana = 100, ManaRegen = 6, CastSpeed = 1, SpellPower = 1, AimHeight = Fix.Ratio(12,10),
+            MaxStamina = SwordData.MaxStamina, StaminaRegen = SwordData.StaminaRegen
         };
     }
 
@@ -127,6 +130,8 @@ namespace AnimLab.Netcode.Sim
         public int Swing, PlungePhase;
         public Fix WeaponTime, IdleSince, GuardSince, GuardReleasedAt, RecoilFor, StuckFor, LastU;
         public bool Queued, ParryArmed, SuperArmor, HasLastBlade;
+        /// <summary>O golpe em curso começou sem stamina para o pagar: corre mais devagar.</summary>
+        public bool TiredSwing;
         /// <summary>Lutadores já atingidos por este golpe (bit = índice).</summary>
         public ushort StruckMask;
         public FighterKind Kind;
@@ -214,12 +219,17 @@ namespace AnimLab.Netcode.Sim
         public byte Team;
         public FixVec3 LastBladeA, LastBladeB;
         public Fix Health, Poise, StaggerUntil, LastHitAt;
+        /// <summary>Stamina atual, quando foi gasta pela última vez, e até quando está atordoado por um golpe (flinch).</summary>
+        public Fix Stamina, StaminaUsedAt, HurtUntil;
         public int HitStop;
         public Buttons BufferedEdges;
         public byte BufferedCast;
         public Fix BodyTime;
         public bool Attacking => Weapon == WeaponState.Windup || Weapon == WeaponState.Active || Weapon == WeaponState.Recovery || Weapon == WeaponState.Plunge;
         public bool Staggered => BodyTime < StaggerUntil;
+        /// <summary>Em stagger ou a sentir um golpe: não ataca, não guarda, não anda.</summary>
+        public bool Hurt => Staggered || BodyTime < HurtUntil;
+        public bool HasStamina => Stamina > Fix.Zero;
         public bool Invulnerable => BodyTime < InvulnerableUntil;
         public FixVec3 Forward => FixVec3.RotateY(FixVec3.Forward, Yaw);
     }
@@ -294,6 +304,7 @@ namespace AnimLab.Netcode.Sim
         }
         public static PlayerState CreatePlayer(PlayerConfig c, FixVec3 position, Fix yaw) => new PlayerState {
             Config = c, Position = position, Yaw = yaw, Health = c.MaxHealth, Poise = c.MaxPoise, Mana = c.MaxMana,
+            Stamina = c.MaxStamina, StaminaUsedAt = -99, HurtUntil = -99,
             IdleSince = -9, GuardReleasedAt = -9, LastHitAt = -99, StaggerUntil = -99, InvulnerableUntil = -99
         };
     }

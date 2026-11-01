@@ -104,8 +104,8 @@ namespace AnimLab.KonoSuba
             if (dist > aggroRange) { sword.guardHeld = false; comboLeft = 0; return; }
             lowHealth = self.Health01 < 0.3f;
 
-            // Em stagger ou a ressaltar não decide nada (um humano também fica "preso" na animação).
-            if (self.IsStaggered || sword.IsRecoiling)
+            // Em stagger, a sentir um golpe ou a ressaltar não decide nada (um humano também fica "preso" na animação).
+            if (self.IsHurt || sword.IsRecoiling)
             {
                 comboLeft = 0;
                 guardUntil = Mathf.Min(guardUntil, now);
@@ -168,8 +168,9 @@ namespace AnimLab.KonoSuba
 
             float roll = Random.value;
             float pParry = skill * 0.5f;
-            float pTrade = sword.IsAttacking || lowHealth ? 0f : aggression * 0.18f;
-            float pBack = 0.12f * hp;
+            float pTrade = sword.IsAttacking || lowHealth || !Affords(1) ? 0f : aggression * 0.18f;
+            // Com pouca stamina, bloquear parte a guarda: prefere recuar.
+            float pBack = 0.12f * hp + (self.Stamina01 < 0.25f ? 0.4f : 0f);
             if (roll < pParry)
             {
                 // Parry: carrega no F pouco antes do impacto. Quanto mais skill, mais certinho.
@@ -216,12 +217,14 @@ namespace AnimLab.KonoSuba
             bool open = oppBody != null && oppBody.IsStaggered
                         || oppSword != null && (oppSword.IsRecoiling
                             || oppSword.Current == SwordWielder.State.Recovery && oppSword.ComboIndex == oppSword.ComboLength - 1);
-            if (open && dist < attackRange + 0.9f)
+            if (open && dist < attackRange + 0.9f && Affords(1))
             {
-                StartCombo(now + Random.Range(reactionTime.x, reactionTime.y) * 0.8f, Random.value < 0.6f ? 3 : 2);
+                StartCombo(now + Random.Range(reactionTime.x, reactionTime.y) * 0.8f, Fit(Random.value < 0.6f ? 3 : 2));
                 return;
             }
 
+            // Cansado: afasta-se para recuperar a stamina antes de voltar a entrar.
+            if (self.Stamina01 < 0.35f) { retreatUntil = Mathf.Max(retreatUntil, now + 0.4f); return; }
             if (now < retreatUntil || now < backstepUntil) return;
 
             // Adversário a guardar há algum tempo: a janela de parry dele já passou — atacar agora só bate
@@ -232,12 +235,12 @@ namespace AnimLab.KonoSuba
             if (dist < attackRange + 0.25f && Random.value < aggression * 0.5f)
             {
                 // Demasiado perto: aproveita.
-                StartCombo(now, PickComboLength());
+                StartCombo(now, Fit(PickComboLength()));
             }
             else if (now >= nextAttackWish && dist < footsieRange + 0.8f)
             {
                 // Chegou a vontade de atacar: entra (passo à frente e golpe).
-                StartCombo(now + Random.Range(0.08f, 0.25f), PickComboLength());
+                StartCombo(now + Random.Range(0.08f, 0.25f), Fit(PickComboLength()));
             }
             else if (Random.value < 0.04f + skill * 0.04f)
             {
@@ -253,6 +256,14 @@ namespace AnimLab.KonoSuba
             if (lowHealth) wait *= 1.6f;
             if (oppGuarding) wait *= 1.3f;
             nextAttackWish = now + wait;
+        }
+
+        // Stamina para um combo de n golpes (a começar do início; o último só precisa de haver alguma).
+        bool Affords(int hits) => self.Stamina > sword.ComboStamina(hits);
+        int Fit(int hits)
+        {
+            while (hits > 1 && !Affords(hits)) hits--;
+            return hits;
         }
 
         int PickComboLength()
@@ -281,6 +292,8 @@ namespace AnimLab.KonoSuba
             {
                 if (attackAt < 0f || now < attackAt) return;
                 if (dist > attackRange + 0.1f) { if (now > attackAt + 1.2f) comboLeft = 0; return; }
+                if (!self.HasStamina) { comboLeft = 0; return; }
+                if (sword.Resting) return; // espera o fim da pausa do combo
                 sword.guardHeld = false;
                 sword.RequestAttack();
                 comboLeft--;
@@ -288,8 +301,9 @@ namespace AnimLab.KonoSuba
                 nextPressAt = now + Random.Range(0.1f, 0.3f); // ritmo das teclas varia
                 return;
             }
-            // Golpes seguintes do combo: carrega outra vez a um tempo humano.
-            if (now < nextPressAt) return;
+            // Golpes seguintes do combo: carrega outra vez a um tempo humano, já dentro da janela (da metade do golpe em diante).
+            if (now < nextPressAt || !sword.CanQueue) return;
+            if (!self.HasStamina) { comboLeft = 0; return; }
             // Se o adversário está a guardar, às vezes corta o combo (para não bater na guarda à toa).
             if (oppSword != null && oppSword.IsGuarding && Random.value < 0.35f + skill * 0.25f)
             {

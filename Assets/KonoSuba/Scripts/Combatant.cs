@@ -43,13 +43,13 @@ namespace AnimLab.KonoSuba
                 if (externalDrive == value) return;
                 if (value)
                 {
-                    float oldHealth = health, oldMax = maxHealth, oldPoise = Poise, oldMaxPoise = maxPoise;
+                    float oldHealth = health, oldMax = maxHealth, oldPoise = Poise, oldMaxPoise = maxPoise, oldStamina = Stamina;
                     float oldFlinch = flinch, oldVelocity = flinchVel; Vector3 oldAxis = flinchAxis;
                     Quaternion oldExtra = extraRotation;
                     bool oldAir = airborne, oldArmor = superArmor;
                     var oldStatuses = new List<ActiveStatus>(statuses);
                     statuses.Clear();
-                    restoreExternal = () => { health = oldHealth; maxHealth = oldMax; Poise = oldPoise; maxPoise = oldMaxPoise;
+                    restoreExternal = () => { health = oldHealth; maxHealth = oldMax; Poise = oldPoise; maxPoise = oldMaxPoise; Stamina = oldStamina;
                         airborne = oldAir; superArmor = oldArmor; flinch = oldFlinch; flinchVel = oldVelocity; flinchAxis = oldAxis; extraRotation = oldExtra;
                         statuses.Clear(); statuses.AddRange(oldStatuses); };
                 }
@@ -57,11 +57,12 @@ namespace AnimLab.KonoSuba
                 externalDrive = value;
             }
         }
-        bool externalStaggered, externalInvulnerable;
+        bool externalStaggered, externalInvulnerable, externalHurt;
 
         public void CaptureNetConfig(ref AnimLab.Netcode.Sim.PlayerConfig c)
         {
             c.MaxHealth = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxHealth); c.Defense = AnimLab.Netcode.Unity.ViewConvert.Fixed(defense);
+            c.MaxStamina = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxStamina); c.StaminaRegen = AnimLab.Netcode.Unity.ViewConvert.Fixed(staminaRegen);
             c.MaxPoise = AnimLab.Netcode.Unity.ViewConvert.Fixed(maxPoise); c.KnockbackScale = AnimLab.Netcode.Unity.ViewConvert.Fixed(knockbackScale);
             var sheet = GetComponent<CharacterStats>();
             c.HealthRegen = sheet != null ? AnimLab.Netcode.Unity.ViewConvert.Fixed(sheet.HealthRegen) : AnimLab.Netcode.Sim.Fix.Zero;
@@ -89,7 +90,10 @@ namespace AnimLab.KonoSuba
             maxPoise = AnimLab.Netcode.Unity.ViewConvert.Number(state.Config.MaxPoise);
             Poise = AnimLab.Netcode.Unity.ViewConvert.Number(state.Poise);
             externalStaggered = state.Staggered;
+            externalHurt = state.Hurt;
             externalInvulnerable = state.Invulnerable;
+            maxStamina = AnimLab.Netcode.Unity.ViewConvert.Number(state.Config.MaxStamina);
+            Stamina = AnimLab.Netcode.Unity.ViewConvert.Number(state.Stamina);
             airborne = state.KnockAirborne;
             superArmor = state.SuperArmor;
             // Estados vindos da simulação (ícones e anéis da placa).
@@ -151,7 +155,11 @@ namespace AnimLab.KonoSuba
                     else { SwordWielder.ShowBlock(point, direction, defender != null ? defender.sparkColor : spark, true); defender?.Shake(); }
                     break;
                 case AnimLab.Netcode.Sim.EventKind.Clash:
-                    SwordWielder.ShowClash(point, direction, spark); attacker?.Shake(); defender?.Shake(); break;
+                    SwordWielder.ShowClash(point, direction, spark); attacker?.Shake(); defender?.Shake();
+                    // A direção é a do empurrão de quem detetou (source); este corpo vai para o lado oposto.
+                    Lean(-direction);
+                    (source as Combatant)?.Lean(direction);
+                    break;
             }
             if (kind == AnimLab.Netcode.Sim.EventKind.Plunge)
             {
@@ -185,6 +193,11 @@ namespace AnimLab.KonoSuba
         [Tooltip("Parte que se inclina ao ser atingido (por omissão, o filho \"Body\").")]
         public Transform visual;
 
+        [Header("Stamina (regras em Netcode/Sim/SwordData.cs)")]
+        public float maxStamina = 100f;
+        [Tooltip("Por segundo, depois de uma pausa sem gastar.")]
+        public float staminaRegen = 30f;
+
         [Header("Boneco de treino")]
         public bool refill = true;
         public float refillDelay = 3f;
@@ -202,6 +215,11 @@ namespace AnimLab.KonoSuba
         public float Poise { get; private set; }
         public float Poise01 => Poise / Mathf.Max(maxPoise, 1f);
         public bool IsStaggered => externalDrive ? externalStaggered : Time.time < staggerUntil;
+        /// <summary>Em stagger ou a sentir um golpe (flinch): não ataca, não guarda, não anda.</summary>
+        public bool IsHurt => externalDrive ? externalHurt : IsStaggered || Time.time < hurtUntil;
+        public float Stamina { get; private set; }
+        public float Stamina01 => Stamina / Mathf.Max(maxStamina, 1f);
+        public bool HasStamina => Stamina > 0f;
         public bool IsAirborne => airborne;
         /// <summary>Stagger a começar (popup, câmara...).</summary>
         public static event Action<Combatant> AnyStagger;
@@ -214,7 +232,17 @@ namespace AnimLab.KonoSuba
         Vector3 knock;          // velocidade horizontal do knockback
         float knockUp, groundY; // velocidade vertical e altura do chão (sem CharacterController)
         bool airborne;
-        float staggerUntil = -99f;
+        float staggerUntil = -99f, hurtUntil = -99f, staminaUsedAt = -99f;
+        SwordWielder sword;
+        static readonly float FlinchTime = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.Flinch);
+        static readonly float StaminaDelay = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.StaminaDelay);
+        static readonly float ExhaustedDelay = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ExhaustedDelay);
+        static readonly float RecoilBrake = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.RecoilBrake);
+        /// <summary>Fator do stagger que este corpo leva pela arma que usa (a Greatsword aguenta mais).</summary>
+        float StaggerTaken => sword == null ? 1f
+            : AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.StaggerTaken((AnimLab.Netcode.Sim.Style)sword.style));
+        /// <summary>Velocidade horizontal do knockback (os pés acompanham-na).</summary>
+        public Vector3 KnockVelocity => knock;
         Vector3 flinchAxis;     // eixo da inclinação (perpendicular ao golpe)
         float flinch, flinchVel;
         Vector3 visualBasePos;
@@ -228,7 +256,34 @@ namespace AnimLab.KonoSuba
             if (visual == null) visual = transform.Find("Body");
             if (visual != null) { visualBasePos = visual.localPosition; visualBaseRot = visual.localRotation; }
             Poise = maxPoise;
+            Stamina = maxStamina;
+            sword = GetComponent<SwordWielder>();
             groundY = transform.position.y;
+        }
+
+        /// <summary>Gasta stamina (nunca abaixo de zero) e adia a recuperação.</summary>
+        public void SpendStamina(float amount)
+        {
+            if (externalDrive) return;
+            Stamina = Mathf.Max(0f, Stamina - amount);
+            staminaUsedAt = Time.time;
+        }
+
+        /// <summary>Encontrão (clash): o corpo dobra-se para trás, na direção em que é empurrado, e volta com a mola.</summary>
+        public void Lean(Vector3 pushed, float strength = 520f)
+        {
+            pushed.y = 0f;
+            if (pushed.sqrMagnitude < 1e-4f) return;
+            flinchAxis = Vector3.Cross(Vector3.up, pushed.normalized);
+            flinchVel += strength;
+        }
+
+        /// <summary>Um golpe entrou: fica um instante sem agir. Devolve false se o super armor aguentou.</summary>
+        public bool Flinch()
+        {
+            if (externalDrive || superArmor && !IsStaggered) return false;
+            hurtUntil = Mathf.Max(hurtUntil, Time.time + FlinchTime * StaggerTaken);
+            return true;
         }
 
         void OnEnable() => All.Add(this);
@@ -262,6 +317,7 @@ namespace AnimLab.KonoSuba
 
             // Postura: quando parte, stagger; o golpe que a parte empurra mais.
             float push = 1f;
+            hit.stagger *= StaggerTaken;
             if (superArmor) { hit.stagger *= 0.25f; push = 0.3f; }
             if (hit.stagger > 0f)
             {
@@ -339,6 +395,9 @@ namespace AnimLab.KonoSuba
                 health = Mathf.Min(maxHealth, health + maxHealth * refillRate * Time.deltaTime);
             if (Poise < maxPoise && Time.time - LastHitTime > poiseRegenDelay)
                 Poise = Mathf.Min(maxPoise, Poise + poiseRegenRate * Time.deltaTime);
+            // Stamina: só recupera depois de uma pausa sem gastar (mais longa se esgotou); a guardar, a metade.
+            if (Stamina < maxStamina && Time.time - staminaUsedAt > (HasStamina ? StaminaDelay : ExhaustedDelay))
+                Stamina = Mathf.Min(maxStamina, Stamina + staminaRegen * (sword != null && sword.IsGuarding ? 0.5f : 1f) * Time.deltaTime);
 
             MoveKnockback(Time.deltaTime);
             UpdateFlinch(Time.deltaTime);
@@ -364,8 +423,8 @@ namespace AnimLab.KonoSuba
                 if (airborne && p.y <= groundY) { p.y = groundY; Land(); }
                 transform.position = p;
             }
-            // Atrito: no chão trava depressa; no ar quase não.
-            knock = Vector3.MoveTowards(knock, Vector3.zero, (airborne ? 2f : 12f) * dt);
+            // Atrito: no chão trava depressa (no ressalto de um clash, ainda mais: encontrão seco); no ar quase não.
+            knock = Vector3.MoveTowards(knock, Vector3.zero, (airborne ? 2f : sword != null && sword.IsRecoiling ? RecoilBrake : 12f) * dt);
         }
 
         void Land()

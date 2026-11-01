@@ -69,6 +69,7 @@ namespace AnimLab.Netcode.Rollback
         public static void Validate(PlayerConfig c)
         {
             Range(c.MaxHealth,1,1000000); Range(c.MaxPoise,1,10000); Range(c.Defense,0,10000); Range(c.HealthRegen,0,1000); Range(c.RefillDelay,0,100); Range(c.RefillRate,0,10);
+            Range(c.MaxStamina,1,10000); Range(c.StaminaRegen,0,1000);
             Range(c.MaxMana,0,100000); Range(c.ManaRegen,0,1000); Range(c.CastSpeed,Fix.Ratio(1,10),10); Range(c.SpellPower,0,100);
             Range(c.CooldownReduction,0,Fix.Ratio(9,10)); Range(c.MagicDefense,0,10000); Range(c.AimHeight,0,10);
             Range(c.Walk,0,50); Range(c.Run,0,50); Range(c.Acceleration,Fix.Ratio(1,10),200); Range(c.Gravity,-200,Fix.Ratio(-1,10));
