@@ -48,6 +48,9 @@ namespace AnimLab.KonoSuba
         }
 
         protected abstract bool Cast(AbilityContext ctx);
+
+        /// <summary>Termina já o que esta habilidade tem em curso offline (ex.: uma canalização); usado ao entrar online.</summary>
+        public virtual void CancelActive() { }
     }
 
     /// <summary>O que uma habilidade precisa de saber no momento do lançamento.</summary>

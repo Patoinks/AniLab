@@ -47,6 +47,8 @@ namespace AnimLab.KonoSuba
             [Tooltip("Avanço do corpo durante a fase ativa (m).")]
             public float lunge = 0.35f;
             public float hitStop = 0.06f;
+            [Tooltip("Stamina gasta ao começar o golpe.")]
+            public float stamina = 12f;
         }
 
         public static readonly List<SwordWielder> All = new List<SwordWielder>();
@@ -81,8 +83,6 @@ namespace AnimLab.KonoSuba
         public float guardArc = 75f;
         [Tooltip("Depois de largar a guarda, durante este tempo voltar a guardar não abre janela de parry.")]
         public float parryLockout = 0.35f;
-        [Tooltip("Stagger do atacante quando leva parry (s).")]
-        public float parriedStagger = 1.1f;
 
         [Header("Controlo")]
         public bool playerControlled;
@@ -125,6 +125,7 @@ namespace AnimLab.KonoSuba
             plungePhase = value.PlungePhase;
             style = (SwordStyle)value.Config.Style;
             parryArmed = value.ParryArmed;
+            tiredSwing = value.TiredSwing;
             externalFrozen = value.HitStop > 0;
             guardSince = Time.time - AnimLab.Netcode.Unity.ViewConvert.Number(value.BodyTime - value.GuardSince);
         }
@@ -181,8 +182,17 @@ namespace AnimLab.KonoSuba
             recovery = AnimLab.Netcode.Unity.ViewConvert.Number(d.Recovery), damage = AnimLab.Netcode.Unity.ViewConvert.Number(d.Damage),
             stagger = AnimLab.Netcode.Unity.ViewConvert.Number(d.Stagger), push = AnimLab.Netcode.Unity.ViewConvert.Number(d.Push),
             lift = AnimLab.Netcode.Unity.ViewConvert.Number(d.Lift), lunge = AnimLab.Netcode.Unity.ViewConvert.Number(d.Lunge),
-            hitStop = AnimLab.Netcode.Unity.ViewConvert.Number(d.HitStop)
+            hitStop = AnimLab.Netcode.Unity.ViewConvert.Number(d.HitStop), stamina = AnimLab.Netcode.Unity.ViewConvert.Number(d.Stamina)
         };
+        // Regras de ritmo (as mesmas da simulação).
+        static readonly float ComboRest = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ComboRest);
+        static readonly float QueueFrom = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.QueueFrom);
+        static readonly float BlockStamina = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.BlockStamina);
+        static readonly float ParryStun = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ParryStun);
+        static readonly float ClashRecoil = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ClashRecoil);
+        static readonly float ClashPush = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ClashPush);
+        static readonly float ClashWindow = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.ClashWindow);
+        static readonly float TiredRate = 1f / AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.TiredSlowdown);
         public static Swing[] MovesOf(SwordStyle s)
         {
             if (movesByStyle.TryGetValue(s, out var moves)) return moves;
@@ -231,6 +241,18 @@ namespace AnimLab.KonoSuba
         public bool IsGuarding => state == State.Guard;
         public bool IsRecoiling => state == State.Recoil;
         public int ComboIndex => swingIndex;
+        /// <summary>O clique para o golpe seguinte conta (da metade da fase ativa em diante).</summary>
+        public bool CanQueue => state == State.Recovery
+            || state == State.Active && stateTime >= Moves[Mathf.Clamp(swingIndex, 0, Moves.Length - 1)].active * QueueFrom;
+        /// <summary>Pausa depois do último golpe do combo: ainda não pode recomeçar.</summary>
+        public bool Resting => swingIndex == Moves.Length - 1 && Time.time - idleSince < ComboRest;
+        /// <summary>Stamina do primeiro golpe de um combo de n golpes, sem contar o último (que só precisa de alguma).</summary>
+        public float ComboStamina(int hits)
+        {
+            float cost = 0f;
+            for (int i = 0; i < hits - 1 && i < Moves.Length; i++) cost += Moves[i].stamina;
+            return cost;
+        }
         public bool InParryWindow => IsGuarding && parryArmed && Time.time - guardSince <= ParryWindow;
         /// <summary>Segundos até a lâmina chegar (estimativa para a AI reagir): 0 se não está a atacar.</summary>
         public float TimeToImpact
@@ -238,7 +260,7 @@ namespace AnimLab.KonoSuba
             get
             {
                 Swing sw = Moves[Mathf.Clamp(swingIndex, 0, Moves.Length - 1)];
-                float k = Mathf.Max(0.1f, speedScale);
+                float k = SwingRate;
                 if (state == State.Plunge) return plungePhase == 0 ? Mathf.Max(0f, plunge.windup - stateTime) + 0.15f : plungePhase == 1 ? 0.1f : 0f;
                 if (state == State.Windup) return (sw.windup - stateTime + sw.active * 0.4f) / k;
                 if (state == State.Active) return Mathf.Max(0f, sw.active * 0.4f - stateTime) / k;
@@ -261,8 +283,10 @@ namespace AnimLab.KonoSuba
 
         State state;
         int swingIndex;
-        bool queued;
+        bool queued, tiredSwing;
         float stateTime, idleSince = -9f;
+        /// <summary>Ritmo do golpe em curso: Attack Speed, e mais devagar se começou sem stamina.</summary>
+        float SwingRate => Mathf.Max(0.1f, speedScale) * (tiredSwing ? TiredRate : 1f);
         float guardSince, guardReleasedAt = -9f, recoilFor, shake;
         bool parryArmed;
         int plungePhase;   // 0 erguer, 1 descer, 2 cravada
@@ -286,6 +310,45 @@ namespace AnimLab.KonoSuba
             self = GetComponent<Combatant>();
             controller = GetComponent<CharacterController>();
             lockOn = GetComponent<LockOn>();
+            if (GetComponent<ParryGlint>() == null) gameObject.AddComponent<ParryGlint>();
+            if (GetComponent<CleaveTrail>() == null) gameObject.AddComponent<CleaveTrail>();
+        }
+
+        // ------------------------------------------------------------------ Para o aviso de parry (ParryGlint)
+        /// <summary>Há um golpe a caminho (a preparar ou a meio), que ainda se pode aparar.</summary>
+        public bool IncomingStrike => state == State.Windup || state == State.Active || state == State.Plunge && plungePhase < 2;
+        /// <summary>Este lutador é o do jogador que está a ver (os golpes dele não pedem parry a ele próprio).</summary>
+        public bool IsViewer
+        {
+            get
+            {
+                var net = AnimLab.Netcode.Unity.NetMatch.Active;
+                return net != null ? net.LocalActor == gameObject : playerControlled;
+            }
+        }
+        public float ParryWindowSeconds => ParryWindow;
+        public Transform ActiveWeapon => Active;
+        public Vector3 ActiveTipLocal => HitB;
+
+        // ------------------------------------------------------------------ Para o rasto de cleave (CleaveTrail)
+        /// <summary>O golpe está na fase ativa: qual e em que ponto do arco (u, como na pose).</summary>
+        public bool CleaveArc(out int swing, out float u)
+        {
+            swing = swingIndex; u = 0f;
+            if (state != State.Active) return false;
+            Swing sw = Moves[Mathf.Clamp(swingIndex, 0, Moves.Length - 1)];
+            u = 1f - Mathf.Pow(1f - Mathf.Clamp01(stateTime / sw.active), 2.2f);
+            return true;
+        }
+        /// <summary>Raiz e ponta da parte que corta da arma, no mundo, num ponto u do arco do golpe.</summary>
+        public void BladeAt(int swing, float u, out Vector3 root, out Vector3 tip)
+        {
+            Pose p = Arc(swing, u);
+            Vector3 scale = Active != null ? Active.lossyScale : Vector3.one;
+            Quaternion r = transform.rotation * p.rot;
+            Vector3 at = transform.TransformPoint(p.pos);
+            root = at + r * Vector3.Scale(scale, HitA);
+            tip = at + r * Vector3.Scale(scale, HitB);
         }
 
         void OnEnable() => All.Add(this);
@@ -295,11 +358,13 @@ namespace AnimLab.KonoSuba
         {
             if (externalDrive) return;
             if (attackOverride != null && attackOverride()) return;
-            if (busy || self != null && self.IsStaggered) return;
+            if (busy || self != null && self.IsHurt) return;
+            // Na pausa do fim do combo, o clique perde-se; a meio do golpe, só conta da metade em diante.
             switch (state)
             {
                 case State.Idle:
                 case State.Guard: // atacar larga a guarda
+                    if (Resting) return;
                     if (state == State.Guard) guardReleasedAt = Time.time;
                     // Encadeia se o último golpe acabou há pouco; senão recomeça o combo.
                     StartSwing(Time.time - idleSince < 0.25f && swingIndex < Moves.Length - 1 ? swingIndex + 1 : 0);
@@ -307,7 +372,7 @@ namespace AnimLab.KonoSuba
                 case State.Windup:
                 case State.Active:
                 case State.Recovery:
-                    if (swingIndex < Moves.Length - 1) queued = true;
+                    if (CanQueue && swingIndex < Moves.Length - 1) queued = true;
                     break;
             }
         }
@@ -320,6 +385,7 @@ namespace AnimLab.KonoSuba
             plungePhase = 0;
             stateTime = 0f;
             queued = false;
+            tiredSwing = false;
             struck.Clear();
             hasLastBlade = false;
         }
@@ -347,6 +413,13 @@ namespace AnimLab.KonoSuba
             queued = false;
         }
 
+        /// <summary>Levou um golpe (flinch): perde o golpe em curso, exceto com a espada já cravada no chão.</summary>
+        public void Flinched()
+        {
+            if (state == State.Plunge && plungePhase == 2) { queued = false; return; }
+            Interrupt();
+        }
+
         /// <summary>Ressalto: a espada é atirada para trás e durante este tempo não ataca nem guarda.</summary>
         public void Recoil(float seconds)
         {
@@ -359,6 +432,10 @@ namespace AnimLab.KonoSuba
 
         void StartSwing(int index)
         {
+            // Sem stamina para o pagar, o golpe sai na mesma, mas mais devagar.
+            float cost = Moves[Mathf.Clamp(index, 0, Moves.Length - 1)].stamina;
+            tiredSwing = self != null && self.Stamina < cost;
+            if (self != null) self.SpendStamina(cost);
             swingIndex = index;
             state = State.Windup;
             stateTime = 0f;
@@ -395,7 +472,7 @@ namespace AnimLab.KonoSuba
                 if (GameInput.GetDown(GameAction.Attack) && !GameHud.PointerOverUI) RequestAttack();
                 guardHeld = GameInput.Get(GameAction.Guard);
             }
-            if (busy) guardHeld = false;
+            if (busy || self != null && self.IsHurt) guardHeld = false;
             if (Weapon == null) return;
             if (shownStyle != style) ShowWeapon();
             // Super armor do montante: a preparar e a desferir quase não se deixa interromper.
@@ -404,7 +481,7 @@ namespace AnimLab.KonoSuba
             bool staggered = self != null && self.IsStaggered;
             if (staggered && state != State.Idle) { state = State.Idle; idleSince = -9f; }
 
-            float dt = Time.deltaTime * (IsAttacking ? Mathf.Max(0.1f, speedScale) : 1f);
+            float dt = Time.deltaTime * (IsAttacking ? SwingRate : 1f);
             Swing sw = Moves[Mathf.Clamp(swingIndex, 0, Moves.Length - 1)];
             stateTime += dt;
             shake = Mathf.MoveTowards(shake, 0f, Time.deltaTime * 6f);
@@ -419,12 +496,16 @@ namespace AnimLab.KonoSuba
                     if (stateTime >= sw.active) { state = State.Recovery; stateTime -= sw.active; }
                     break;
                 case State.Recovery:
+                {
+                    // Golpe falhado (não tocou em ninguém): recuperação inteira, sem cortar para o golpe seguinte nem para a guarda.
+                    bool whiff = struck.Count == 0;
                     // O golpe seguinte entra a meio da recuperação, se foi pedido.
-                    if (queued && stateTime >= sw.recovery * 0.35f) { StartSwing(swingIndex + 1); break; }
+                    if (queued && stateTime >= sw.recovery * (whiff ? 1f : 0.35f)) { StartSwing(swingIndex + 1); break; }
                     // A guarda também pode cortar o fim da recuperação.
-                    if (guardHeld && stateTime >= sw.recovery * 0.5f) { EnterGuard(); break; }
+                    if (guardHeld && !whiff && stateTime >= sw.recovery * 0.5f) { idleSince = Time.time; EnterGuard(); break; }
                     if (stateTime >= sw.recovery) { state = State.Idle; idleSince = Time.time; }
                     break;
+                }
                 case State.Guard:
                     if (!guardHeld || staggered) { state = State.Idle; guardReleasedAt = Time.time; }
                     break;
@@ -651,7 +732,7 @@ namespace AnimLab.KonoSuba
 
                 foreach (SwordWielder other in All)
                 {
-                    if (other == this || !other.Swinging) continue;
+                    if (other == this || !other.Swinging || !InSync(other)) continue;
                     if (SegmentDistance(b0, b1, other.BladeBase, other.BladeTip, out Vector3 at) <= clashRadius)
                     {
                         Clash(other, at);
@@ -676,6 +757,12 @@ namespace AnimLab.KonoSuba
 
         /// <summary>A lâmina está a cortar (fase ativa de um golpe ou a descer no pique): conta para clashes.</summary>
         bool Swinging => state == State.Active || state == State.Plunge && plungePhase == 1;
+        // Tempo real desde que a lâmina começou a cortar (o pique conta sempre como a tempo).
+        float SinceActive => state == State.Plunge ? 0f : stateTime / SwingRate;
+        /// <summary>As duas lâminas começaram a cortar quase ao mesmo tempo: só aí o cruzamento dá clash
+        /// (senão quem atacou primeiro passa, como na simulação).</summary>
+        bool InSync(SwordWielder other) => state == State.Plunge || other.state == State.Plunge
+                                           || Mathf.Abs(SinceActive - other.SinceActive) <= ClashWindow;
 
         // Pique: a lâmina só desce (não roda), por isso uma reta entre o frame anterior e este chega.
         void SweepLinear()
@@ -691,7 +778,7 @@ namespace AnimLab.KonoSuba
                 Vector3 b1 = hasLastBlade ? Vector3.Lerp(lastBlade[n - 1], now[n - 1], f) : now[n - 1];
                 foreach (SwordWielder other in All)
                 {
-                    if (other == this || !other.Swinging) continue;
+                    if (other == this || !other.Swinging || !InSync(other)) continue;
                     if (SegmentDistance(b0, b1, other.BladeBase, other.BladeTip, out Vector3 at) <= clashRadius)
                     {
                         Clash(other, at);
@@ -747,8 +834,8 @@ namespace AnimLab.KonoSuba
                 knockback = away.normalized * push + Vector3.up * sw.lift,
                 point = point, source = transform
             });
-            // Quem leva um golpe a meio do seu próprio golpe perde-o.
-            if (guard != null && guard.IsAttacking && c.IsStaggered) guard.Interrupt();
+            // Quem leva um golpe perde o seu e fica um instante sem agir (o super armor aguenta).
+            if (c.Flinch() && guard != null) guard.Flinched();
             // Faíscas a sair na direção em que a lâmina corre (e um pouco para fora do alvo).
             ShowHit(point, run.normalized + away.normalized * 0.5f, Heavy, sparkColor, sw.hitStop);
             AnyBladeHit?.Invoke(this, c, point);
@@ -770,7 +857,7 @@ namespace AnimLab.KonoSuba
             attacker.Interrupt();
             if (attacker.self != null)
             {
-                attacker.self.Stagger(parriedStagger);
+                attacker.self.Stagger(ParryStun);
                 attacker.self.Knock(toAttacker.normalized * 3f);
             }
             shake = 1f;
@@ -778,20 +865,25 @@ namespace AnimLab.KonoSuba
             AnyGuarded?.Invoke(attacker, this, true);
         }
 
-        // Este corpo bloqueou o golpe de attacker: leva uma fração do dano e da postura; o atacante ressalta.
+        // Este corpo bloqueou o golpe de attacker: leva uma fração do dano e gasta stamina (a zero, a guarda parte);
+        // o atacante ressalta.
         void Blocked(SwordWielder attacker, Swing sw)
         {
             Vector3 at = BladeMid;
             Vector3 fromAttacker = transform.position - attacker.transform.position; fromAttacker.y = 0f;
-            bool wasStaggered = self != null && self.IsStaggered;
+            bool broken = false;
             if (self != null)
+            {
+                bool wasStaggered = self.IsStaggered;
                 self.TakeHit(new HitInfo
                 {
                     damage = sw.damage * attacker.damageScale * (1f - blockReduction), element = AbilityElement.Neutral,
-                    stagger = sw.stagger * attacker.staggerScale * 0.6f,
                     knockback = fromAttacker.normalized * sw.push * 0.45f, point = at, source = attacker.transform
                 });
-            bool broken = self != null && !wasStaggered && self.IsStaggered;
+                self.SpendStamina(sw.stagger * attacker.staggerScale * BlockStamina);
+                broken = !wasStaggered && !self.HasStamina;
+                if (broken) self.Stagger(self.staggerTime);
+            }
             if (broken) state = State.Idle;
             // (o montante é pesado: não ressalta na guarda e o combo segue até ao Guard Breaker)
             if (attacker.style != SwordStyle.Greatsword) attacker.Recoil(0.22f);
@@ -824,11 +916,12 @@ namespace AnimLab.KonoSuba
         {
             Vector3 apart = transform.position - other.transform.position; apart.y = 0f;
             apart = apart.sqrMagnitude > 1e-4f ? apart.normalized : -transform.forward;
-            Recoil(0.42f);
-            other.Recoil(0.42f);
+            Recoil(ClashRecoil);
+            other.Recoil(ClashRecoil);
             shake = other.shake = 1f;
-            if (self != null) self.Knock(apart * 3.5f);
-            if (other.self != null) other.self.Knock(-apart * 3.5f);
+            // Os dois são empurrados para trás (para longe um do outro).
+            if (self != null) { self.Knock(apart * ClashPush); self.Lean(apart); }
+            if (other.self != null) { other.self.Knock(-apart * ClashPush); other.self.Lean(-apart); }
             ShowClash(at, apart, sparkColor);
             AnyClash?.Invoke(this, other);
         }

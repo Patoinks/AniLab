@@ -72,6 +72,8 @@ namespace AnimLab.Netcode.Unity
         bool statsVisible = true;
         public static NetMatch Active { get; private set; }
         public static bool InputBlocked;
+        /// <summary>A tecla está atribuída a uma ação do jogo (o HUD liga isto ao GameInput); as teclas de diagnóstico cedem.</summary>
+        public static Func<KeyCode, bool> KeyTaken;
         public int EventsPresented { get; private set; }
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         static void ResetStatics() { Active=null; InputBlocked=false; }
@@ -101,7 +103,7 @@ namespace AnimLab.Netcode.Unity
             {
                 State.Abilities = CaptureTable(player);
                 // Gravações com bots lançadores: hotbar com o Dash e a Bola de Fogo, mesmo sem árvores aprendidas.
-                if (BotsCast) for (int i = 0; i < 2; i++) { ref PlayerState b = ref MatchState.Player(ref State, i); b.Config.SetSlot(0, AbilityId.Dash); b.Config.SetSlot(1, AbilityId.FireBall); }
+                if (BotsCast) for (int i = 0; i < 2; i++) { ref PlayerState b = ref MatchState.Player(ref State, i); b.Config.Learn(AbilityId.Dash); b.Config.Learn(AbilityId.FireBall); }
                 State.P0.Team = State.P1.Team = CoOp ? (byte)1 : (byte)0;
                 if (WithAI) foreach (var f in SceneFighters(State.Rng)) MatchState.Add(ref State, f);
                 Previous = State;
@@ -257,6 +259,7 @@ namespace AnimLab.Netcode.Unity
                 else if (c is INetCombatView b) { bodies[id] = b; b.ExternalDrive = true; }
                 else if (c is INetSwordView w) { swords[id] = w; w.ExternalDrive = true; }
                 else if (c is INetAbilityView a) { casters[id] = a; a.ExternalDrive = true; }
+                else if (c is INetPresentation) { }
                 else if (c.GetType().Name != "LockOnTarget" && !(id == LocalPlayer && c.GetType().Name == "LockOn")) Disable(c);
             }
         }
@@ -277,8 +280,8 @@ namespace AnimLab.Netcode.Unity
                 if (Controls == LocalControl.TwoKeyboards)
                     secondInput.Sample(InputBlocked ? default : InputSampling.SecondKeyboard(actors[1].transform,actors[0].transform));
             }
-            if (Input.GetKeyDown(KeyCode.F9) && UseRollback) SwitchView();
-            if (Input.GetKeyDown(KeyCode.F11)) statsVisible = !statsVisible;
+            if (Input.GetKeyDown(KeyCode.F9) && UseRollback && !(KeyTaken?.Invoke(KeyCode.F9) ?? false)) SwitchView();
+            if (Input.GetKeyDown(KeyCode.F11) && !(KeyTaken?.Invoke(KeyCode.F11) ?? false)) statsVisible = !statsVisible;
             accumulator += Time.captureFramerate > 0 ? 1.0 / Time.captureFramerate : Math.Min(Time.unscaledDeltaTime, 0.25);
             while (accumulator >= 1.0 / 60)
             {

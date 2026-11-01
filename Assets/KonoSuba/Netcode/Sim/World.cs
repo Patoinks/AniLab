@@ -28,8 +28,13 @@ namespace AnimLab.Netcode.Sim
                 // A IA decide aqui, a partir do estado no início do tick; os bonecos ficam parados.
                 PlayerInput x = p.Kind == FighterKind.Duelist ? DuelistBrain.Think(ref state, i, events)
                     : p.Kind == FighterKind.Dummy ? default : inputs != null && i < inputs.Length ? inputs[i] : default;
-                if (p.HitStop > 0) { frozen |= 1 << i; p.BufferedEdges |= x.Buttons & edges; }
-                else { x.Buttons |= p.BufferedEdges; p.BufferedEdges = 0; }
+                if (p.HitStop > 0) { frozen |= 1 << i; p.BufferedEdges |= x.Buttons & edges; if (x.Cast != 0) p.BufferedCast = x.Cast; }
+                else
+                {
+                    x.Buttons |= p.BufferedEdges; p.BufferedEdges = 0;
+                    if (x.Cast == 0) x.Cast = p.BufferedCast;
+                    p.BufferedCast = 0;
+                }
                 input[i] = x;
             }
             for (int i = 0; i < count; i++) if ((frozen & 1 << i) != 0) MatchState.Player(ref state, i).HitStop--;
@@ -72,8 +77,8 @@ namespace AnimLab.Netcode.Sim
             FixVec3 wish = input.Wish;
             bool attack = p.Attacking, recoil = p.Weapon == WeaponState.Recoil, guard = p.Weapon == WeaponState.Guard;
             bool swinging = p.Weapon == WeaponState.Windup || p.Weapon == WeaponState.Active;
-            bool free = !p.Staggered && !recoil && !swinging;
-            Fix scale = p.Staggered || recoil ? 0 : attack ? F(15) : guard ? F(40) : 1;
+            bool free = !p.Hurt && !recoil && !swinging;
+            Fix scale = p.Hurt || recoil ? 0 : attack ? F(15) : guard ? F(40) : 1;
             if (p.BodyTime < p.LandLagUntil) scale = 0;
             bool grounded = p.Position.Y <= Fix.Epsilon;
             if (input.Has(Buttons.Jump))
@@ -88,14 +93,16 @@ namespace AnimLab.Netcode.Sim
             }
             if (input.Has(Buttons.Roll) && p.Motion == Motion.Ground && grounded && free && p.BodyTime >= p.RollReadyAt && p.BodyTime >= p.LandLagUntil)
             {
+                Spend(ref p, SwordData.RollStamina);
                 p.RollDirection = wish.LengthSquared > F(1) ? wish.Normalized : p.Forward;
                 p.Yaw = Fix.Atan2(p.RollDirection.X, p.RollDirection.Z);
                 p.Weapon = WeaponState.Idle; p.IdleSince = -9; p.Queued = false;
                 p.Motion = Motion.Roll; p.MotionTime = 0; p.RollJumpQueued = false; p.RollReadyAt = p.BodyTime + p.Config.RollDuration + p.Config.RollCooldown;
                 events.Add(s.Tick, EventKind.Roll, id, id, p.Position, p.RollDirection);
             }
-            if (input.Has(Buttons.Attack) && p.Motion == Motion.Air && !p.Staggered && p.Position.Y >= p.Config.PlungeMinHeight)
+            if (input.Has(Buttons.Attack) && p.Motion == Motion.Air && !p.Hurt && p.Position.Y >= p.Config.PlungeMinHeight)
             {
+                Spend(ref p, SwordData.Plunge.Stamina); p.TiredSwing = false;
                 p.Motion = Motion.Plunge; p.MotionTime = 0; p.LongJump = false; p.Dived = false;
                 FixVec3 d = (target - p.Position).Flat;
                 p.HasPlungeTarget = hasTarget && (input.Targeted || d.Length < 4 && FixVec3.Dot(p.Forward, d.Normalized) > Fix.Cos(Fix.Degrees(80)));
@@ -147,7 +154,7 @@ namespace AnimLab.Netcode.Sim
             if (p.Motion == Motion.Roll) yaw = Fix.Atan2(p.RollDirection.X, p.RollDirection.Z);
             else if (p.Motion == Motion.Plunge && p.HasPlungeTarget && hasTarget && (target - p.Position).Flat.LengthSquared > F(1))
                 yaw = Fix.Atan2(target.X - p.Position.X, target.Z - p.Position.Z);
-            if (!p.Staggered && !recoil && (!attack || p.Motion == Motion.Plunge))
+            if (!p.Hurt && !recoil && (!attack || p.Motion == Motion.Plunge))
                 p.Yaw += Fix.Clamp(Fix.DeltaAngle(p.Yaw, yaw), -p.Config.Turn * Dt, p.Config.Turn * Dt);
             if (p.Motion == Motion.Ground || p.Motion == Motion.Roll) p.VerticalVelocity = grounded ? -2 : p.VerticalVelocity + p.Config.Gravity * Dt;
             else if (p.Motion == Motion.Air) p.VerticalVelocity += p.Config.Gravity * Dt;

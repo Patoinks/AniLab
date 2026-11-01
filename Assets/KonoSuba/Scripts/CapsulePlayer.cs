@@ -95,8 +95,16 @@ namespace AnimLab.KonoSuba
             // Alvo do lock-on como índice do lutador; teclas 1–9 da hotbar; ponto de mira no chão debaixo do rato.
             int target = lockOn != null && lockOn.Current != null ? AnimLab.Netcode.Unity.NetMatch.FighterIndexOf(lockOn.Current.gameObject) : -1;
             if (target >= 0) input.TargetSlot = (byte)(target + 1);
-            for (int i = 0; i < 9; i++)
-                if (GameInput.GetDown((GameAction)((int)GameAction.Ability1 + i))) { input.Cast = (byte)(i + 1); break; }
+            // Vai a habilidade que está no espaço (não o número do espaço): a hotbar pode mudar a meio da partida.
+            var bar = GetComponent<AbilityBar>();
+            for (int i = 0; i < 9 && bar != null; i++)
+            {
+                var key = (GameAction)((int)GameAction.Ability1 + i);
+                byte id = (byte)AbilityBar.IdOf(bar.At(i));
+                if (id == 0) continue;
+                if (GameInput.GetDown(key) && input.Cast == 0) input.Cast = id;
+                if (GameInput.Get(key) && input.Held == 0) input.Held = id;
+            }
             Vector3 aim = transform.position + transform.forward * 10f;
             if (cam != null && new Plane(Vector3.up, Vector3.zero).Raycast(cam.ScreenPointToRay(Input.mousePosition), out float d))
                 aim = cam.ScreenPointToRay(Input.mousePosition).GetPoint(d);
@@ -109,6 +117,7 @@ namespace AnimLab.KonoSuba
         {
             transform.SetPositionAndRotation(position, Quaternion.Euler(0f, yaw, 0f));
             velocity = AnimLab.Netcode.Unity.ViewConvert.Vector(state.Velocity);
+            slide = AnimLab.Netcode.Unity.ViewConvert.Vector(state.Knock);
             motion = (Motion)state.Motion;
             motionTime = AnimLab.Netcode.Unity.ViewConvert.Number(state.MotionTime);
             longJump = state.LongJump;
@@ -169,6 +178,9 @@ namespace AnimLab.KonoSuba
         LockOn lockOn;
         Camera cam;
         Vector3 velocity;
+        /// <summary>Knockback horizontal (encontrões): os pés andam com ele, para o corpo não deslizar.</summary>
+        Vector3 slide;
+        Vector3 Moving => new Vector3(velocity.x + slide.x, 0f, velocity.z + slide.z);
         float verticalVelocity;
         Vector3 moveTarget;
         bool hasMoveTarget;
@@ -252,7 +264,7 @@ namespace AnimLab.KonoSuba
 
             // Em stagger e no ressalto não anda nem roda; a atacar quase não anda e é a espada que decide para
             // onde olha; a guardar anda devagar, sem virar as costas (vira-se para o alvo, se houver).
-            bool staggered = combatant != null && combatant.IsStaggered;
+            bool staggered = combatant != null && combatant.IsHurt; // stagger ou flinch
             bool attacking = sword != null && sword.IsAttacking;
             bool recoiling = sword != null && sword.IsRecoiling;
             bool guarding = sword != null && sword.IsGuarding;
@@ -347,6 +359,7 @@ namespace AnimLab.KonoSuba
             }
             if (sword != null) sword.busy = motion == Motion.Roll || motion == Motion.Plunge || Time.time < landLagUntil;
 
+            slide = combatant != null ? combatant.KnockVelocity : Vector3.zero;
             UpdateFeet(running);
             UpdateBody();
         }
@@ -358,6 +371,8 @@ namespace AnimLab.KonoSuba
 
         /// <summary>Roll como se tivesse carregado na tecla (gravações e AI).</summary>
         public void Roll(Vector3 direction) => TryRoll(direction, controller.isGrounded, true);
+
+        static readonly float RollStamina = AnimLab.Netcode.Unity.ViewConvert.Number(AnimLab.Netcode.Sim.SwordData.RollStamina);
 
         void PressJump(bool grounded, bool canAct)
         {
@@ -375,6 +390,8 @@ namespace AnimLab.KonoSuba
         {
             if (externalDrive) return false;
             if (motion != Motion.Ground || !grounded || !canAct || Time.time < rollReadyAt || Time.time < landLagUntil) return false;
+            if (combatant != null && combatant.IsHurt) return false;
+            if (combatant != null) combatant.SpendStamina(RollStamina);
             direction.y = 0f;
             rollDir = direction.sqrMagnitude > 0.01f ? direction.normalized : transform.forward;
             transform.rotation = Quaternion.LookRotation(rollDir, Vector3.up);
@@ -403,8 +420,9 @@ namespace AnimLab.KonoSuba
         {
             if (motion == Motion.Roll || motion == Motion.Plunge) return true;
             if (motion != Motion.Air) return false;
-            if (combatant != null && combatant.IsStaggered) return true;
+            if (combatant != null && combatant.IsHurt) return true;
             if (HeightAboveGround(out float groundY) < plungeMinHeight) return true;
+            if (combatant != null && sword != null) combatant.SpendStamina(sword.plunge.stamina);
             motion = Motion.Plunge;
             motionTime = 0f;
             longJump = false;
@@ -531,7 +549,7 @@ namespace AnimLab.KonoSuba
         Vector3 FootHome(Foot f, float lead)
         {
             Vector3 p = transform.position + transform.right * (f.side * footSpacing);
-            Vector3 v = velocity; v.y = 0f;
+            Vector3 v = Moving;
             p += v.normalized * (lead * Mathf.Clamp01(v.magnitude / walkSpeed));
             p.y = 0.04f;
             return p;
@@ -556,9 +574,11 @@ namespace AnimLab.KonoSuba
                 return;
             }
 
-            float speed01 = Mathf.Clamp01(velocity.magnitude / runSpeed);
+            float speed01 = Mathf.Clamp01(Moving.magnitude / runSpeed);
             float duration = Mathf.Lerp(stepDuration, stepDuration * 0.7f, speed01);
             float threshold = Mathf.Lerp(stepThreshold, stepThreshold * 1.6f, speed01);
+            // Empurrado: passos curtos e rápidos para trás, a tropeçar.
+            if (slide.sqrMagnitude > 1f) { duration *= 0.55f; threshold *= 0.5f; }
 
             foreach (Foot f in new[] { left, right })
             {
@@ -607,7 +627,7 @@ namespace AnimLab.KonoSuba
             Vector3 home = FootHome(f, 0f);
             Vector3 d = home - f.planted; d.y = 0f;
             // Parado: arruma os pés quando ficam tortos depois de rodar.
-            float limit = velocity.sqrMagnitude < 0.01f ? 0.12f : threshold;
+            float limit = Moving.sqrMagnitude < 0.01f ? 0.12f : threshold;
             return d.magnitude > limit;
         }
 

@@ -3,8 +3,30 @@ using UnityEngine;
 namespace AnimLab.KonoSuba
 {
     /// <summary>Bola de Fogo, tecla 5: condensa no ombro e segue para o alvo ou para o ponto de mira.</summary>
-    public class FireBallAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource
+    public class FireBallAbility : Ability, AnimLab.Netcode.Unity.INetAbilitySource, AnimLab.Netcode.Unity.INetAbilityPresenter
     {
+        // ------------------------------------------------------------------ Online
+        readonly System.Collections.Generic.Dictionary<int, FireBallFlightVisual> netBalls = new System.Collections.Generic.Dictionary<int, FireBallFlightVisual>();
+        public AnimLab.Netcode.Sim.AbilityId NetAbility => AnimLab.Netcode.Sim.AbilityId.FireBall;
+        public void Present(AnimLab.Netcode.Sim.SimEvent ev, GameObject other)
+        {
+            if (ev.Kind != AnimLab.Netcode.Sim.EventKind.Impact) return;
+            Collider body = other != null ? other.GetComponentInChildren<Collider>() : null;
+            FireBallEffect.Impact(AnimLab.Netcode.Unity.ViewConvert.Vector(ev.Point), body, transform, this);
+        }
+        public void Sync(int slot, in AnimLab.Netcode.Sim.ProjectileState now, in AnimLab.Netcode.Sim.ProjectileState before, float alpha, float dt)
+        {
+            Vector3 position = Vector3.Lerp(AnimLab.Netcode.Unity.ViewConvert.Vector(before.Position), AnimLab.Netcode.Unity.ViewConvert.Vector(now.Position), alpha);
+            if (!netBalls.TryGetValue(slot, out var visual) || visual == null)
+                netBalls[slot] = visual = FireBallFlightVisual.Create(position, Mathf.Clamp(visualRadius, 0.9f, 1.1f) * 0.85f, slot * 7919 + 13, ballMaterial);
+            float formation = AnimLab.Netcode.Unity.ViewConvert.Number(now.Formation);
+            float f = Mathf.SmoothStep(0f, 1f, AnimLab.Netcode.Unity.ViewConvert.Number(now.Age) / Mathf.Max(0.05f, formation));
+            visual.Tick(dt, position, now.Launched ? AnimLab.Netcode.Unity.ViewConvert.Vector(now.Velocity) : Vector3.zero, f);
+        }
+        public void Clear(int slot)
+        {
+            if (netBalls.TryGetValue(slot, out var visual)) { if (visual != null) visual.Release(); netBalls.Remove(slot); }
+        }
         public void CaptureNetAbility(ref AnimLab.Netcode.Sim.AbilityTable t)
         {
             t.FireMana = AnimLab.Netcode.Unity.ViewConvert.Fixed(manaCost); t.FireCooldown = AnimLab.Netcode.Unity.ViewConvert.Fixed(cooldown);

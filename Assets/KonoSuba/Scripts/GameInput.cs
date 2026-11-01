@@ -53,6 +53,12 @@ namespace AnimLab.KonoSuba
             return current.TryGetValue(a, out KeyCode k) ? k : KeyCode.None;
         }
 
+        /// <summary>A tecla está atribuída a alguma ação do jogo.</summary>
+        public static bool IsBound(KeyCode key)
+        {
+            foreach (GameAction a in System.Enum.GetValues(typeof(GameAction))) if (Key(a) == key) return true;
+            return false;
+        }
         public static KeyCode DefaultKey(GameAction a) => Defaults.TryGetValue(a, out KeyCode k) ? k : KeyCode.None;
 
         public static bool GetDown(GameAction a) => !Suspended && Input.GetKeyDown(Key(a));

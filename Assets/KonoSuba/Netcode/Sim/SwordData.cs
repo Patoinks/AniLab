@@ -3,32 +3,97 @@ namespace AnimLab.Netcode.Sim
     public readonly struct SwingData
     {
         public readonly Fix Windup, Active, Recovery, Damage, Stagger, Push, Lift, Lunge, HitStop;
-        public SwingData(int windup, int active, int recovery, int damage, int stagger, int push, int lift, int lunge, int stop)
+        /// <summary>Stamina que o golpe gasta ao começar.</summary>
+        public readonly Fix Stamina;
+        public SwingData(int windup, int active, int recovery, int damage, int stagger, int push, int lift, int lunge, int stop, int stamina = 0)
         {
             Windup = Fix.Ratio(windup,100); Active = Fix.Ratio(active,100); Recovery = Fix.Ratio(recovery,100);
             Damage = damage; Stagger = stagger; Push = Fix.Ratio(push,100); Lift = Fix.Ratio(lift,100);
-            Lunge = Fix.Ratio(lunge,100); HitStop = Fix.Ratio(stop,100);
+            Lunge = Fix.Ratio(lunge,100); HitStop = Fix.Ratio(stop,100); Stamina = stamina;
+        }
+        SwingData(Fix windup, Fix active, Fix recovery, Fix damage, Fix stagger, Fix push, Fix lift, Fix lunge, Fix stop, Fix stamina)
+        {
+            Windup = windup; Active = active; Recovery = recovery; Damage = damage; Stagger = stagger;
+            Push = push; Lift = lift; Lunge = lunge; HitStop = stop; Stamina = stamina;
+        }
+        /// <summary>Golpe de uma arma: o golpe base da Espada × (tempo, dano) da arma × a lentidão global.
+        /// A stamina segue a média de tempo e dano: armas pesadas gastam mais por golpe.</summary>
+        internal static SwingData Weapon(SwingData baseMove, Fix time, Fix damage, int push, int lift, int lunge, int stop)
+        {
+            Fix t = time * SwordData.Slowdown;
+            return new SwingData(baseMove.Windup * t, baseMove.Active * t, baseMove.Recovery * t, baseMove.Damage * damage,
+                baseMove.Stagger * damage, Fix.Ratio(push,100), Fix.Ratio(lift,100), Fix.Ratio(lunge,100), Fix.Ratio(stop,100),
+                baseMove.Stamina * (time + damage) / 2);
         }
     }
+    /// <summary>
+    /// Regras de combate (fonte única do offline e do online):
+    ///   · A Espada (Knight) é a referência: dois golpes leves e um pesado.
+    ///   · Cada arma = golpes da Espada × (tempo, dano). Mais lenta = mais dano, mas mais fácil de aparar.
+    ///   · Tudo é <see cref="Slowdown"/> mais lento do que era (para dar mais tempo a ver e a aparar).
+    /// O empurrão, o salto, o avanço do corpo e o hit-stop continuam próprios de cada arma (dão o carácter).
+    /// </summary>
     public static class SwordData
     {
+        /// <summary>Todos os golpes 30% mais lentos (tempo × 1,3).</summary>
+        public static readonly Fix Slowdown = Fix.Ratio(13,10);
+        /// <summary>(tempo, dano) de cada arma em relação à Espada.</summary>
+        public static Fix TimeRatio(Style s) => s == Style.Greatsword ? Fix.Ratio(12,10) : s == Style.Reaper ? Fix.Ratio(11,10)
+            : s == Style.Fencer ? Fix.Ratio(8,10) : s == Style.Daggers ? Fix.Ratio(6,10) : Fix.One;
+        public static Fix DamageRatio(Style s) => s == Style.Greatsword ? 2 : s == Style.Reaper ? Fix.Ratio(15,10)
+            : s == Style.Fencer ? Fix.Ratio(75,100) : s == Style.Daggers ? Fix.Ratio(5,10) : Fix.One;
+
+        /// <summary>Quanto stagger o lutador leva com esta arma: a Greatsword é pesada e aguenta mais (postura gasta e flinch
+        /// × este fator, sempre, além do super armor a golpear).</summary>
+        public static Fix StaggerTaken(Style s) => s == Style.Greatsword ? Fix.Ratio(6,10) : Fix.One;
+        /// <summary>Alcance extra do braço (m) nos arcos: a Greatsword chega mais longe.</summary>
+        public static Fix ExtraReach(Style s) => s == Style.Greatsword ? Fix.Ratio(22,100) : Fix.Zero;
+
+        // Ritmo (contra o spam): cada regra castiga carregar sem pensar e premeia ler o adversário.
+        /// <summary>Quem leva um golpe perde o seu e fica este tempo sem atacar nem guardar (o super armor ignora).</summary>
+        public static readonly Fix Flinch = Fix.Ratio(25,100);
+        /// <summary>Depois do último golpe do combo, este tempo sem poder recomeçar (a janela para responder).</summary>
+        public static readonly Fix ComboRest = Fix.Ratio(35,100);
+        /// <summary>O clique para o golpe seguinte só conta a partir desta fração da fase ativa (antes perde-se).</summary>
+        public static readonly Fix QueueFrom = Fix.Ratio(50,100);
+        /// <summary>Stagger de quem leva parry (s).</summary>
+        public static readonly Fix ParryStun = Fix.Ratio(6,10);
+        /// <summary>Clash: os dois recuam e são empurrados para trás a esta velocidade (m/s). Durante o ressalto o empurrão
+        /// trava com RecoilBrake (m/s²) em vez do atrito normal: um encontrão seco (~1 m em ~0,25 s), não um deslize.</summary>
+        public static readonly Fix ClashRecoil = Fix.Ratio(42,100), ClashPush = Fix.Ratio(75,10), RecoilBrake = 30;
+        /// <summary>Só há clash se as duas lâminas começaram a cortar com esta diferença ou menos (s). Senão, quem atacou
+        /// primeiro passa: a lâmina dele chega ao corpo e o flinch corta o golpe do outro.</summary>
+        public static readonly Fix ClashWindow = Fix.Ratio(7,100);
+        /// <summary>Golpe começado sem stamina para o pagar: corre este fator mais devagar (+30% de tempo).</summary>
+        public static readonly Fix TiredSlowdown = Fix.Ratio(13,10);
+        /// <summary>Stamina: recupera depois de StaminaDelay sem gastar (ExhaustedDelay se chegou a zero); a guardar, a metade.</summary>
+        public static readonly Fix MaxStamina = 100, StaminaRegen = 30, StaminaDelay = Fix.Ratio(6,10), ExhaustedDelay = Fix.Ratio(12,10);
+        public static readonly Fix RollStamina = 20, DashStamina = 15;
+        /// <summary>Um bloqueio tira à stamina do defensor esta fração da postura do golpe; a zero, a guarda parte.</summary>
+        public static readonly Fix BlockStamina = Fix.Ratio(45,100);
+
+        // Golpes base da Espada (tempos em centésimos de segundo, antes da lentidão global; o último número é a stamina).
+        static readonly SwingData Light1 = new SwingData(12,13,30,18,30,0,0,0,0,12), Light2 = new SwingData(12,13,30,20,35,0,0,0,0,12),
+            Heavy = new SwingData(18,14,42,34,70,0,0,0,0,22);
+        static SwingData W(Style s, SwingData b, int push, int lift, int lunge, int stop) =>
+            SwingData.Weapon(b, TimeRatio(s), DamageRatio(s), push, lift, lunge, stop);
+
         static readonly SwingData[] knight = {
-            new SwingData(12,13,30,18,30,220,0,30,6), new SwingData(12,13,30,20,35,260,0,30,6),
-            new SwingData(18,14,42,34,70,700,300,55,11) };
+            W(Style.Knight,Light1,220,0,30,6), W(Style.Knight,Light2,260,0,30,6), W(Style.Knight,Heavy,700,300,55,11) };
+        // Estocada, estocada baixa e Lunge.
         static readonly SwingData[] fencer = {
-            new SwingData(8,10,22,13,18,120,0,45,4), new SwingData(8,10,24,13,18,120,0,45,4),
-            new SwingData(16,16,36,28,45,350,0,240,9) };
+            W(Style.Fencer,Light1,120,0,45,4), W(Style.Fencer,Light2,120,0,45,4), W(Style.Fencer,Heavy,350,0,240,9) };
+        // Reap, Reverse Reap e Harvest: push negativo = puxa o alvo.
         static readonly SwingData[] reaper = {
-            new SwingData(20,20,32,22,30,-350,0,20,6), new SwingData(18,20,34,22,30,-350,0,20,6),
-            new SwingData(28,32,45,32,55,-500,0,10,10) };
+            W(Style.Reaper,Light1,-350,0,20,6), W(Style.Reaper,Light2,-350,0,20,6), W(Style.Reaper,Heavy,-500,0,10,10) };
+        // Quatro cortes alternados e a estocada dupla.
         static readonly SwingData[] daggers = {
-            new SwingData(6,8,16,9,14,80,0,35,3), new SwingData(6,8,16,9,14,80,0,35,3),
-            new SwingData(6,8,16,9,14,80,0,35,3), new SwingData(6,8,16,9,14,80,0,35,3),
-            new SwingData(12,12,30,20,35,250,0,60,7) };
+            W(Style.Daggers,Light1,80,0,35,3), W(Style.Daggers,Light2,80,0,35,3),
+            W(Style.Daggers,Light1,80,0,35,3), W(Style.Daggers,Light2,80,0,35,3), W(Style.Daggers,Heavy,250,0,60,7) };
+        // Cleave, Sweep e Guard Breaker (avanço maior: o alcance é a vantagem do montante).
         static readonly SwingData[] greatsword = {
-            new SwingData(32,20,45,38,60,400,0,35,10), new SwingData(28,22,50,38,60,500,0,30,10),
-            new SwingData(42,18,60,55,100,700,250,45,14) };
-        public static readonly SwingData Plunge = new SwingData(16,0,45,30,55,300,150,0,8);
+            W(Style.Greatsword,Light1,400,0,55,10), W(Style.Greatsword,Light2,500,0,50,10), W(Style.Greatsword,Heavy,700,250,65,14) };
+        public static readonly SwingData Plunge = new SwingData(16,0,45,30,55,300,150,0,8,22);
         public static int Count(Style style) => style == Style.Daggers ? 5 : 3;
         public static SwingData Get(Style style, int i)
         {
@@ -88,7 +153,7 @@ namespace AnimLab.Netcode.Sim
                 var p = Make(V(12,115,5)+d*F(42),d,new FixVec3(-Fix.Sin(a),0,Fix.Cos(a)));
                 return i % 2 == 1 ? Mirror(p) : p;
             }
-            Fix arm = F(48) + (bodyRadius - F(30)) * F(150);
+            Fix arm = F(48) + (bodyRadius - F(30)) * F(150) + SwordData.ExtraReach(style);
             if (i == 0) {
                 Fix a = Fix.Degrees(Fix.Lerp(-35,205,u));
                 FixVec3 d = new FixVec3(Fix.Cos(a),Fix.Lerp(F(5),F(-20),u),Fix.Sin(a)).Normalized;
